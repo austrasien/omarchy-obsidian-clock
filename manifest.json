@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "id": "austraz.clock",
+  "name": "Obsidian Clock",
+  "version": "1.0.0",
+  "author": "austrasien (fork of Omarchy clock)",
+  "license": "MIT",
+  "description": "Date/time label with a calendar popup and Obsidian daily journal",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Obsidian Clock",
+    "description": "Date/time label with a clickable calendar and daily journal",
+    "category": "Time",
+    "allowMultiple": false,
+    "defaults": {
+      "vaultPath": "",
+      "journalBin": ""
+    },
+    "schema": [
+      {
+        "key": "vaultPath",
+        "type": "path",
+        "label": "Obsidian vault path",
+        "description": "Absolute path to your Obsidian vault. Set this after install (omarchy bar set, or vaultPath on the widget in shell.json). Daily notes follow .obsidian/daily-notes.json.",
+        "defaultValue": ""
+      },
+      {
+        "key": "journalBin",
+        "type": "path",
+        "label": "Journal backend binary",
+        "description": "Optional absolute path to obsidian-daily-qs. Leave empty to auto-detect an installed austraz.obsidian-daily plugin or a binary on PATH.",
+        "defaultValue": ""
+      }
+    ]
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.clock"
+  }
+}
