@@ -42,6 +42,12 @@ Panel {
 
   readonly property string homeDir: Quickshell.env("HOME") || ""
   readonly property string vaultPath: String(setting("vaultPath", "") || "").trim()
+  readonly property string todoHeading: String(setting("todoHeading", "Tasks") || "").trim()
+  readonly property int notesH2Count: {
+    var n = Number(setting("notesH2Count", 2))
+    if (!isFinite(n) || n < 1) return 2
+    return Math.floor(n)
+  }
   property string hostArch: ""
   property string resolvedJournalBin: ""
   readonly property string journalBin: root.resolvedJournalBin
@@ -50,6 +56,30 @@ Panel {
   property string journalDraft: ""
   property bool journalDirty: false
   property string journalSynced: ""
+  property string journalTab: "notes"
+  property string notesHeading: "Notes"
+  property string linksHeading: "Links / captured ideas"
+  property string morningHeading: "Morning review"
+  property string nightlyHeading: "Nightly review"
+  property string notesDraft: ""
+  property string linksDraft: ""
+  property string morningDraft: ""
+  property string nightlyDraft: ""
+  property string notesSynced: ""
+  property string linksSynced: ""
+  property string morningSynced: ""
+  property string nightlySynced: ""
+  property bool applyingJournal: false
+  property string editorLoadedKey: ""
+  readonly property bool tasksTab: journalTab === "tasks"
+  readonly property bool reviewTab: journalTab === "morning" || journalTab === "nightly"
+  readonly property var journalTabs: [
+    { key: "notes", label: "Notes", tooltip: "Notes" },
+    { key: "links", label: "Links", tooltip: "Links / captured ideas" },
+    { key: "tasks", label: "Tasks", tooltip: "Tasks" },
+    { key: "morning", label: "󰖨", tooltip: "Morning review" },
+    { key: "nightly", label: "󰖔", tooltip: "Nightly review" }
+  ]
   property bool journalExists: false
   property string journalError: ""
   property string journalUri: ""
@@ -190,6 +220,225 @@ Panel {
   readonly property string bundledJournalBin: root.hostArch === "" ? "" : root.decodeFileUrl(
     Qt.resolvedUrl("bin/obsidian-daily-qs-" + root.hostArch).toString())
 
+  function journalPrefix() {
+    var cmd = [root.journalBin, "--vault", root.vaultPath]
+    if (root.todoHeading !== "") {
+      cmd.push("--heading")
+      cmd.push(root.todoHeading)
+    }
+    return cmd
+  }
+
+  function journalCommand(args) {
+    return root.journalPrefix().concat(args)
+  }
+
+  function monthJournalCommand(args) {
+    var cmd = root.journalPrefix()
+    if (root.notesH2Count > 0) {
+      cmd.push("--notes-h2-count")
+      cmd.push(String(root.notesH2Count))
+    }
+    return cmd.concat(args)
+  }
+
+  function lineIsMarkdownHeading(line) {
+    return /^#{1,6}\s+\S/.test(String(line || "").trim())
+  }
+
+  function notesHaveBody(notes) {
+    return String(notes || "").split("\n").some(function(line) {
+      var t = String(line || "").trim()
+      return t !== "" && !root.lineIsMarkdownHeading(t)
+    })
+  }
+
+  function kindForHeading(title) {
+    var t = String(title || "").trim().toLowerCase()
+    if (t === "tasks" || t === "todos" || t === "tâches") return "tasks"
+    if (t.indexOf("link") >= 0 || t.indexOf("captured") >= 0 || t.indexOf("idée") >= 0 || t.indexOf("idee") >= 0)
+      return "links"
+    if (t.indexOf("morning") >= 0 || t.indexOf("matinal") >= 0) return "morning"
+    if (t.indexOf("night") >= 0 || t.indexOf("nightly") >= 0 || t.indexOf("nocturne") >= 0)
+      return "nightly"
+    if (t === "notes") return "notes"
+    return ""
+  }
+
+  function headingForTab(tab) {
+    if (tab === "links") return root.linksHeading
+    if (tab === "morning") return root.morningHeading
+    if (tab === "nightly") return root.nightlyHeading
+    if (tab === "tasks") return root.todoHeading || "Tasks"
+    return root.notesHeading
+  }
+
+  function draftForTab(tab) {
+    if (tab === "links") return root.linksDraft
+    if (tab === "morning") return root.morningDraft
+    if (tab === "nightly") return root.nightlyDraft
+    return root.notesDraft
+  }
+
+  function syncedForTab(tab) {
+    if (tab === "links") return root.linksSynced
+    if (tab === "morning") return root.morningSynced
+    if (tab === "nightly") return root.nightlySynced
+    return root.notesSynced
+  }
+
+  function setDraftForTab(tab, text) {
+    if (tab === "links") root.linksDraft = text
+    else if (tab === "morning") root.morningDraft = text
+    else if (tab === "nightly") root.nightlyDraft = text
+    else root.notesDraft = text
+  }
+
+  function setSyncedForTab(tab, text) {
+    if (tab === "links") root.linksSynced = text
+    else if (tab === "morning") root.morningSynced = text
+    else if (tab === "nightly") root.nightlySynced = text
+    else root.notesSynced = text
+  }
+
+  function placeholderForTab(tab) {
+    if (tab === "links") return "Capture a link or idea…"
+    if (tab === "morning") return "Morning review…"
+    if (tab === "nightly") return "Nightly review…"
+    return root.journalExists ? "Write a note…" : "No note yet — type to create it"
+  }
+
+  function splitLeadingCheckboxes(body) {
+    var lines = String(body || "").split("\n")
+    var todos = []
+    var i = 0
+    var re = /^(\s*)([-*+])\s+\[([ xX])\]\s+(.*)$/
+    while (i < lines.length && String(lines[i]).trim() === "")
+      i++
+    while (i < lines.length) {
+      var match = re.exec(lines[i])
+      if (!match) break
+      todos.push({
+        index: todos.length,
+        checked: match[3] !== " ",
+        text: match[4],
+        indent: match[1],
+        bullet: match[2]
+      })
+      i++
+    }
+    return { todos: todos, rest: lines.slice(i).join("\n") }
+  }
+
+  function composeReviewBody(todos, rest) {
+    var lines = []
+    var list = todos || []
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i]
+      var mark = item.checked ? "x" : " "
+      lines.push((item.indent || "") + (item.bullet || "-") + " [" + mark + "] " + item.text)
+    }
+    var prose = String(rest || "").replace(/^\n+/, "").replace(/\s+$/, "")
+    if (prose !== "")
+      lines.push(prose)
+    return lines.join("\n")
+  }
+
+  function editorTextForTab(tab) {
+    if (tab === "morning" || tab === "nightly")
+      return root.splitLeadingCheckboxes(root.draftForTab(tab)).rest
+    return root.draftForTab(tab)
+  }
+
+  readonly property var visibleReviewTodos: {
+    var body = ""
+    if (root.journalTab === "morning") body = root.morningDraft
+    else if (root.journalTab === "nightly") body = root.nightlyDraft
+    return root.splitLeadingCheckboxes(body).todos
+  }
+
+  function setEditorFromTab(force) {
+    if (!journalArea || root.journalTab === "tasks") return
+    var next = root.editorTextForTab(root.journalTab)
+    var sameDay = root.editorLoadedKey === root.selectedKey
+    if (!force && journalArea.activeFocus && sameDay)
+      return
+    root.applyingJournal = true
+    journalArea.text = next
+    if (force || !sameDay)
+      journalArea.cursorPosition = next.length
+    if (journalFlick)
+      journalFlick.contentY = 0
+    root.editorLoadedKey = root.selectedKey
+    root.applyingJournal = false
+  }
+
+  function applySections(list) {
+    var keepTab = ""
+    var keepBody = ""
+    if (journalArea && journalArea.activeFocus && root.editorLoadedKey === root.selectedKey) {
+      keepTab = root.journalTab
+      keepBody = root.draftForTab(keepTab)
+    }
+    root.notesHeading = "Notes"
+    root.linksHeading = "Links / captured ideas"
+    root.morningHeading = "Morning review"
+    root.nightlyHeading = "Nightly review"
+    root.notesDraft = ""
+    root.linksDraft = ""
+    root.morningDraft = ""
+    root.nightlyDraft = ""
+    if (Array.isArray(list)) {
+      for (var i = 0; i < list.length; i++) {
+        var item = list[i]
+        if (!item || typeof item !== "object") continue
+        var kind = root.kindForHeading(item.heading)
+        if (kind === "" || kind === "tasks") continue
+        var body = typeof item.body === "string" ? item.body : ""
+        if (kind === "links") {
+          root.linksHeading = String(item.heading || root.linksHeading)
+          root.linksDraft = body
+        } else if (kind === "morning") {
+          root.morningHeading = String(item.heading || root.morningHeading)
+          root.morningDraft = body
+        } else if (kind === "nightly") {
+          root.nightlyHeading = String(item.heading || root.nightlyHeading)
+          root.nightlyDraft = body
+        } else {
+          root.notesHeading = String(item.heading || root.notesHeading)
+          root.notesDraft = body
+        }
+      }
+    }
+    if (keepTab !== "" && keepTab !== "tasks")
+      root.setDraftForTab(keepTab, keepBody)
+    root.notesSynced = root.notesDraft
+    root.linksSynced = root.linksDraft
+    root.morningSynced = root.morningDraft
+    root.nightlySynced = root.nightlyDraft
+    if (keepTab !== "") {
+      root.setSyncedForTab(keepTab, keepBody)
+      root.journalDraft = journalArea.text
+      root.journalSynced = keepBody
+    } else {
+      root.journalDraft = root.editorTextForTab(root.journalTab)
+      root.journalSynced = root.syncedForTab(root.journalTab)
+    }
+    root.setEditorFromTab(false)
+  }
+
+  function selectJournalTab(tab) {
+    var next = String(tab || "")
+    if (next === "" || next === root.journalTab) return
+    if (root.journalDirty) root.saveJournalNow()
+    root.journalTab = next
+    root.applyingJournal = true
+    root.journalDraft = root.editorTextForTab(next)
+    root.journalSynced = root.syncedForTab(next)
+    root.setEditorFromTab(true)
+    root.applyingJournal = false
+  }
+
   function resolveJournalBin() {
     var arch = root.hostArch
     var configured = String(setting("journalBin", "") || "").trim()
@@ -217,7 +466,7 @@ Panel {
     var date = root.pendingStatusDate !== "" ? root.pendingStatusDate : root.selectedKey
     root.pendingStatusDate = ""
     if (root.journalBin === "" || root.vaultPath === "" || date === "") return
-    statusProc.command = [root.journalBin, "--vault", root.vaultPath, "status", "--date", date]
+    statusProc.command = root.journalCommand(["status", "--date", date])
     statusProc.running = true
   }
 
@@ -232,7 +481,7 @@ Panel {
       return
     }
     var date = root.viewYear + "-" + root.pad2(root.viewMonth + 1) + "-01"
-    monthProc.command = [root.journalBin, "--vault", root.vaultPath, "month", "--date", date]
+    monthProc.command = root.monthJournalCommand(["month", "--date", date])
     monthProc.running = true
   }
 
@@ -291,17 +540,24 @@ Panel {
   function saveJournalNow() {
     journalSaveTimer.stop()
     if (!root.journalDirty) return
+    if (root.journalTab === "tasks") return
     if (root.journalBin === "" || root.vaultPath === "") return
+    var heading = root.headingForTab(root.journalTab)
+    var body = root.draftForTab(root.journalTab)
     root.journalDirty = false
-    root.journalSynced = root.journalDraft
-    notesProc.command = [root.journalBin, "--vault", root.vaultPath, "set-notes", "--date", root.selectedKey, "--text", root.journalDraft]
+    root.journalSynced = body
+    root.setSyncedForTab(root.journalTab, body)
+    notesProc.command = root.journalPrefix().concat([
+      "--notes-heading", heading,
+      "set-notes", "--date", root.selectedKey, "--text", body
+    ])
     notesProc.running = true
   }
 
   function openSelectedInObsidian() {
     if (root.journalDirty) root.saveJournalNow()
     if (root.journalBin === "" || root.vaultPath === "") return
-    actionProc.command = [root.journalBin, "--vault", root.vaultPath, "open", "--date", root.selectedKey]
+    actionProc.command = root.journalCommand(["open", "--date", root.selectedKey])
     actionProc.running = true
   }
 
@@ -337,24 +593,20 @@ Panel {
       }
     }
     root.todos = nextTodos
-    var notes = typeof parsed.notes === "string" ? parsed.notes : ""
-    root.journalNotes = notes
-    root.journalSynced = notes
-    root.journalDraft = notes
-    root.journalDirty = false
-    if (journalArea)
-      journalArea.text = notes
-    if (journalFlick)
-      journalFlick.contentY = 0
+    var keepEditor = journalArea && journalArea.activeFocus && root.editorLoadedKey === root.selectedKey
+    root.applyingJournal = true
+    root.applySections(parsed.sections)
+    root.journalNotes = typeof parsed.notes === "string" ? parsed.notes : ""
+    if (!keepEditor)
+      root.journalDirty = false
+    root.applyingJournal = false
     var dateKey = parsed.date ? String(parsed.date) : root.selectedKey
     if (dateKey !== "") {
       var open = Number(parsed.openCount)
       var done = Number(parsed.doneCount)
       if (!isFinite(open)) open = nextTodos.filter(function(t) { return !t.checked }).length
       if (!isFinite(done)) done = nextTodos.filter(function(t) { return t.checked }).length
-      var hasNotes = String(notes || "").split("\n").some(function(line) {
-        return String(line || "").trim() !== ""
-      })
+      var hasNotes = root.notesHaveBody(root.notesDraft) || root.notesHaveBody(root.linksDraft)
       root.patchMonthMark(dateKey, open, done, hasNotes)
     }
   }
@@ -375,7 +627,7 @@ Panel {
     var trimmed = String(text || "").trim()
     if (trimmed === "" || root.journalBin === "" || root.vaultPath === "" || root.selectedKey === "")
       return
-    actionProc.command = [root.journalBin, "--vault", root.vaultPath, "add", "--date", root.selectedKey, "--text", trimmed]
+    actionProc.command = root.journalCommand(["add", "--date", root.selectedKey, "--text", trimmed])
     actionProc.running = true
   }
 
@@ -383,16 +635,56 @@ Panel {
     var n = Number(line)
     if (!isFinite(n) || n < 1) return
     if (root.journalBin === "" || root.vaultPath === "" || root.selectedKey === "") return
-    var args = [root.journalBin, "--vault", root.vaultPath, "toggle", "--date", root.selectedKey, "--line", String(Math.floor(n))]
+    var args = root.journalCommand(["toggle", "--date", root.selectedKey, "--line", String(Math.floor(n))])
     if (typeof text === "string" && text !== "")
       args.push("--expect-text", text)
     actionProc.command = args
     actionProc.running = true
   }
 
+  function toggleReviewTodo(index) {
+    var n = Number(index)
+    if (!isFinite(n) || n < 0) return
+    var tab = root.journalTab
+    if (tab !== "morning" && tab !== "nightly") return
+    var split = root.splitLeadingCheckboxes(root.draftForTab(tab))
+    if (n >= split.todos.length) return
+    var rest = journalArea && !root.tasksTab ? journalArea.text : split.rest
+    var todos = []
+    for (var i = 0; i < split.todos.length; i++) {
+      var item = split.todos[i]
+      todos.push({
+        index: item.index,
+        checked: i === n ? !item.checked : item.checked,
+        text: item.text,
+        indent: item.indent,
+        bullet: item.bullet
+      })
+    }
+    var next = root.composeReviewBody(todos, rest)
+    root.setDraftForTab(tab, next)
+    root.setSyncedForTab(tab, next)
+    root.journalDraft = root.editorTextForTab(tab)
+    root.journalSynced = next
+    root.journalDirty = false
+    journalSaveTimer.stop()
+    if (root.journalBin === "" || root.vaultPath === "") return
+    notesProc.command = root.journalPrefix().concat([
+      "--notes-heading", root.headingForTab(tab),
+      "set-notes", "--date", root.selectedKey, "--text", next
+    ])
+    notesProc.running = true
+  }
+
   function onJournalEdited(text) {
+    if (root.applyingJournal || root.journalTab === "tasks") return
+    var tab = root.journalTab
+    var next = text
+    if (tab === "morning" || tab === "nightly")
+      next = root.composeReviewBody(root.splitLeadingCheckboxes(root.draftForTab(tab)).todos, text)
+    root.setDraftForTab(tab, next)
     root.journalDraft = text
-    root.journalDirty = (text !== root.journalSynced)
+    root.journalDirty = (next !== root.syncedForTab(tab))
     if (root.journalDirty) journalSaveTimer.restart()
     else journalSaveTimer.stop()
   }
@@ -1085,89 +1377,55 @@ Panel {
               foreground: root.contentForeground
             }
 
-            Repeater {
-              model: root.todos
-
-              Rectangle {
-                required property var modelData
-                width: calendarColumn.width
-                implicitHeight: todoLabel.implicitHeight + Style.space(10)
-                radius: Style.cornerRadius
-                color: todoMouse.containsMouse
-                  ? Style.hoverFillFor(root.contentForeground, Color.accent)
-                  : "transparent"
-
-                MouseArea {
-                  id: todoMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.toggleTodo(modelData.line, modelData.text)
-                }
-
-                Row {
-                  anchors.left: parent.left
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  anchors.leftMargin: (modelData.depth || 0) * Style.space(14)
-                  spacing: Style.space(8)
-
-                  BorderSurface {
-                    width: Style.space(16)
-                    height: Style.space(16)
-                    anchors.verticalCenter: parent.verticalCenter
-                    radius: Math.max(2, Style.cornerRadius * 0.45)
-                    color: modelData.checked
-                      ? Style.selectedFillFor(root.contentForeground, Color.accent)
-                      : "transparent"
-                    borderSpec: Border.controlSpec(
-                      modelData.checked ? "selected" : "normal",
-                      root.contentForeground,
-                      Color.accent)
-
-                    Text {
-                      anchors.centerIn: parent
-                      visible: modelData.checked === true
-                      text: "\u2713"
-                      textFormat: Text.PlainText
-                      color: root.contentForeground
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.caption
-                      font.bold: true
-                    }
-                  }
-
-                  Text {
-                    id: todoLabel
-                    width: parent.width - Style.space(24)
-                      - (modelData.depth || 0) * Style.space(14)
-                    text: modelData.text
-                    textFormat: Text.PlainText
-                    color: modelData.checked
-                      ? Qt.darker(root.contentForeground, 1.6)
-                      : root.contentForeground
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    font.strikeout: modelData.checked === true
-                    wrapMode: Text.WordWrap
-                  }
-                }
-              }
-            }
-
             RowLayout {
               width: parent.width
-              spacing: Style.space(8)
+              spacing: Style.space(4)
 
-              Text {
-                Layout.fillWidth: true
-                text: root.selectedKey !== "" ? root.selectedKey : "Journal"
-                textFormat: Text.PlainText
-                color: root.contentForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.title
-                font.bold: true
+              Repeater {
+                model: root.journalTabs
+
+                Rectangle {
+                  required property var modelData
+                  readonly property bool selected: modelData && modelData.key === root.journalTab
+                  Layout.preferredHeight: Style.space(28)
+                  Layout.preferredWidth: tabLabel.implicitWidth + Style.space(16)
+                  radius: Style.cornerRadius
+                  color: selected || tabMouse.containsMouse
+                    ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                    : "transparent"
+                  border.width: selected ? Style.spacing.hairline : 0
+                  border.color: Style.normalBorderFor(root.contentForeground, Color.accent)
+
+                  Text {
+                    id: tabLabel
+                    anchors.centerIn: parent
+                    text: modelData ? modelData.label : ""
+                    textFormat: Text.PlainText
+                    color: selected
+                      ? root.contentForeground
+                      : Qt.darker(root.contentForeground, 1.45)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: selected
+                  }
+
+                  MouseArea {
+                    id: tabMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.selectJournalTab(modelData.key)
+                  }
+
+                  PanelToolTip {
+                    visible: tabMouse.containsMouse && modelData && modelData.tooltip
+                    text: modelData ? modelData.tooltip : ""
+                    fontFamily: root.contentFontFamily
+                  }
+                }
               }
+
+              Item { Layout.fillWidth: true }
 
               Text {
                 visible: root.journalDirty
@@ -1198,10 +1456,193 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+              visible: root.tasksTab
+
+              Repeater {
+                model: root.todos
+
+                Rectangle {
+                  required property var modelData
+                  width: calendarColumn.width
+                  implicitHeight: todoLabel.implicitHeight + Style.space(10)
+                  radius: Style.cornerRadius
+                  color: todoMouse.containsMouse
+                    ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                    : "transparent"
+
+                  MouseArea {
+                    id: todoMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.toggleTodo(modelData.line, modelData.text)
+                  }
+
+                  Row {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: (modelData.depth || 0) * Style.space(14)
+                    spacing: Style.space(8)
+
+                    BorderSurface {
+                      width: Style.space(16)
+                      height: Style.space(16)
+                      anchors.verticalCenter: parent.verticalCenter
+                      radius: Math.max(2, Style.cornerRadius * 0.45)
+                      color: modelData.checked
+                        ? Style.selectedFillFor(root.contentForeground, Color.accent)
+                        : "transparent"
+                      borderSpec: Border.controlSpec(
+                        modelData.checked ? "selected" : "normal",
+                        root.contentForeground,
+                        Color.accent)
+
+                      Text {
+                        anchors.centerIn: parent
+                        visible: modelData.checked === true
+                        text: "\u2713"
+                        textFormat: Text.PlainText
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                    }
+
+                    Text {
+                      id: todoLabel
+                      width: parent.width - Style.space(24)
+                        - (modelData.depth || 0) * Style.space(14)
+                      text: modelData.text
+                      textFormat: Text.PlainText
+                      color: modelData.checked
+                        ? Qt.darker(root.contentForeground, 1.6)
+                        : root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      font.strikeout: modelData.checked === true
+                      wrapMode: Text.WordWrap
+                    }
+                  }
+                }
+              }
+
+              RowLayout {
+                width: parent.width
+                spacing: Style.space(8)
+                height: todoInput.implicitHeight
+
+                TextField {
+                  id: todoInput
+                  Layout.fillWidth: true
+                  Layout.fillHeight: true
+                  placeholderText: "Add a todo…"
+                  foreground: root.contentForeground
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.body
+                  onAccepted: root.addTodo()
+                  Keys.onEscapePressed: root.close()
+                }
+
+                PanelActionButton {
+                  iconText: "+"
+                  tooltipText: "Add todo"
+                  bordered: true
+                  size: todoInput.implicitHeight
+                  Layout.preferredWidth: size
+                  Layout.preferredHeight: size
+                  Layout.alignment: Qt.AlignVCenter
+                  foreground: root.contentForeground
+                  fontFamily: root.contentFontFamily
+                  fontSize: Style.font.body
+                  onClicked: root.addTodo()
+                }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+              visible: root.reviewTab
+
+              Repeater {
+                model: root.visibleReviewTodos
+
+                Rectangle {
+                  required property var modelData
+                  width: calendarColumn.width
+                  implicitHeight: reviewTodoLabel.implicitHeight + Style.space(10)
+                  radius: Style.cornerRadius
+                  color: reviewTodoMouse.containsMouse
+                    ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                    : "transparent"
+
+                  MouseArea {
+                    id: reviewTodoMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.toggleReviewTodo(modelData.index)
+                  }
+
+                  Row {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+
+                    BorderSurface {
+                      width: Style.space(16)
+                      height: Style.space(16)
+                      anchors.verticalCenter: parent.verticalCenter
+                      radius: Math.max(2, Style.cornerRadius * 0.45)
+                      color: modelData.checked
+                        ? Style.selectedFillFor(root.contentForeground, Color.accent)
+                        : "transparent"
+                      borderSpec: Border.controlSpec(
+                        modelData.checked ? "selected" : "normal",
+                        root.contentForeground,
+                        Color.accent)
+
+                      Text {
+                        anchors.centerIn: parent
+                        visible: modelData.checked === true
+                        text: "\u2713"
+                        textFormat: Text.PlainText
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                    }
+
+                    Text {
+                      id: reviewTodoLabel
+                      width: parent.width - Style.space(24)
+                      text: modelData.text
+                      textFormat: Text.PlainText
+                      color: modelData.checked
+                        ? Qt.darker(root.contentForeground, 1.6)
+                        : root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      font.strikeout: modelData.checked === true
+                      wrapMode: Text.WordWrap
+                    }
+                  }
+                }
+              }
+            }
+
             Item {
               id: journalFrame
               width: parent.width
               height: Style.space(180)
+              visible: !root.tasksTab
 
               BorderSurface {
                 anchors.fill: parent
@@ -1231,7 +1672,7 @@ Panel {
                   selectByMouse: true
                   persistentSelection: true
                   color: root.contentForeground
-                  placeholderText: root.journalExists ? "Write this day’s journal…" : "No note yet — type to create it"
+                  placeholderText: root.placeholderForTab(root.journalTab)
                   font.family: root.contentFontFamily
                   font.pixelSize: Style.font.body
                   background: Item {}
@@ -1253,8 +1694,6 @@ Panel {
                 }
               }
 
-              // TextArea eats the wheel; this handler is on the frame so a
-              // long note still scrolls when the pointer is over it.
               WheelHandler {
                 acceptedButtons: Qt.NoButton
                 onWheel: function(event) {
@@ -1265,38 +1704,6 @@ Panel {
                   journalFlick.contentY = Math.max(0, Math.min(maxY, journalFlick.contentY - delta))
                   event.accepted = true
                 }
-              }
-            }
-
-            RowLayout {
-              width: parent.width
-              spacing: Style.space(8)
-              height: todoInput.implicitHeight
-
-              TextField {
-                id: todoInput
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                placeholderText: "Add a todo…"
-                foreground: root.contentForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.body
-                onAccepted: root.addTodo()
-                Keys.onEscapePressed: root.close()
-              }
-
-              PanelActionButton {
-                iconText: "+"
-                tooltipText: "Add todo"
-                bordered: true
-                size: todoInput.implicitHeight
-                Layout.preferredWidth: size
-                Layout.preferredHeight: size
-                Layout.alignment: Qt.AlignVCenter
-                foreground: root.contentForeground
-                fontFamily: root.contentFontFamily
-                fontSize: Style.font.body
-                onClicked: root.addTodo()
               }
             }
           }

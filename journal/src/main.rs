@@ -10,8 +10,9 @@ use obsidian_daily_qs::config::Vault;
 use obsidian_daily_qs::status::{Snapshot, WeekSummary};
 use obsidian_daily_qs::watch;
 use obsidian_daily_qs::{
-    add_todo_under, carry_over, delete_todo, edit_todo, month_summary, open_in_obsidian,
-    read_snapshot_filtered, set_indent, set_notes, toggle_todo, undo_last, week_summary,
+    SnapshotFilter, add_todo_under, carry_over, delete_todo, edit_todo, month_summary_with,
+    open_in_obsidian, read_snapshot_with, set_indent, set_notes_with, toggle_todo, undo_last,
+    week_summary_with,
 };
 
 #[derive(Parser)]
@@ -33,9 +34,18 @@ struct Cli {
     #[arg(long, global = true)]
     archive_folder: Option<String>,
 
-    /// Markdown heading for the free-form notes pane (default: Notes)
+    /// Only include todos under this markdown heading (e.g. Tasks)
+    #[arg(long, global = true)]
+    heading: Option<String>,
+
+    /// Markdown heading for the free-form notes pane (default: whole note
+    /// minus checkboxes). Ignored when --notes-h2-count is set.
     #[arg(long, global = true)]
     notes_heading: Option<String>,
+
+    /// Notes pane: first N `##` sections, including the heading lines
+    #[arg(long, global = true, value_name = "N")]
+    notes_h2_count: Option<usize>,
 
     #[command(subcommand)]
     command: Command,
@@ -47,15 +57,9 @@ enum Command {
     Status {
         #[arg(long)]
         date: Option<String>,
-        /// Only include todos under this markdown heading (e.g. Todos)
-        #[arg(long)]
-        heading: Option<String>,
     },
     /// Stream today's status snapshots as JSON lines when the note changes
-    Watch {
-        #[arg(long)]
-        heading: Option<String>,
-    },
+    Watch,
     /// Add an open checkbox todo
     Add {
         #[arg(long)]
@@ -150,87 +154,106 @@ fn main() {
     let cli = Cli::parse();
     let vault_arg = cli.vault.clone();
     let archive_arg = cli.archive_folder.clone();
+    let heading = cli.heading.clone();
     let notes_heading = cli.notes_heading.clone();
+    let notes_h2_count = cli.notes_h2_count;
+    let filter = SnapshotFilter {
+        todo_heading: heading.as_deref(),
+        notes_heading: notes_heading.as_deref(),
+        notes_h2_count,
+    };
     match cli.command {
-        Command::Status { date, heading } => emit(run(
+        Command::Status { date } => emit(run(
             vault_arg,
             archive_arg,
-            |vault, d| {
-                read_snapshot_filtered(vault, d, heading.as_deref(), notes_heading.as_deref())
-            },
+            |vault, d| read_snapshot_with(vault, d, filter),
             date,
         )),
-        Command::Watch { heading } => watch::watch(
+        Command::Watch => watch::watch(
             cli.vault.clone(),
             cli.archive_folder.clone(),
-            heading,
-            notes_heading,
+            heading.clone(),
+            notes_heading.clone(),
+            notes_h2_count,
         ),
         Command::Add {
             text,
             date,
             under_line,
-        } => emit(run(
+        } => emit(then_snapshot(
             vault_arg,
             archive_arg,
-            |vault, d| add_todo_under(vault, d, &text, under_line),
             date,
+            filter,
+            |vault, d| add_todo_under(vault, d, &text, under_line),
         )),
         Command::Toggle {
             line,
             expect_text,
             date,
-        } => emit(run(
+        } => emit(then_snapshot(
             vault_arg,
             archive_arg,
-            |vault, d| toggle_todo(vault, d, line, expect_text.as_deref()),
             date,
+            filter,
+            |vault, d| toggle_todo(vault, d, line, expect_text.as_deref()),
         )),
         Command::Edit {
             line,
             text,
             expect_text,
             date,
-        } => emit(run(
+        } => emit(then_snapshot(
             vault_arg,
             archive_arg,
-            |vault, d| edit_todo(vault, d, line, expect_text.as_deref(), &text),
             date,
+            filter,
+            |vault, d| edit_todo(vault, d, line, expect_text.as_deref(), &text),
         )),
         Command::Delete {
             line,
             expect_text,
             with_children,
             date,
-        } => emit(run(
+        } => emit(then_snapshot(
             vault_arg,
             archive_arg,
-            |vault, d| delete_todo(vault, d, line, expect_text.as_deref(), with_children),
             date,
+            filter,
+            |vault, d| delete_todo(vault, d, line, expect_text.as_deref(), with_children),
         )),
         Command::Indent {
             line,
             expect_text,
             date,
-        } => emit(run(
+        } => emit(then_snapshot(
             vault_arg,
             archive_arg,
-            |vault, d| set_indent(vault, d, line, expect_text.as_deref(), 1),
             date,
+            filter,
+            |vault, d| set_indent(vault, d, line, expect_text.as_deref(), 1),
         )),
         Command::Outdent {
             line,
             expect_text,
             date,
-        } => emit(run(
+        } => emit(then_snapshot(
             vault_arg,
             archive_arg,
-            |vault, d| set_indent(vault, d, line, expect_text.as_deref(), -1),
             date,
+            filter,
+            |vault, d| set_indent(vault, d, line, expect_text.as_deref(), -1),
         )),
         Command::Undo => emit(match Vault::resolve(vault_arg, archive_arg) {
             Ok(vault) => match undo_last(&vault) {
-                Ok(snap) => snap,
+                Ok(snap) => {
+                    let date = snap
+                        .date
+                        .as_deref()
+                        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+                        .unwrap_or_else(|| Local::now().date_naive());
+                    read_snapshot_with(&vault, date, filter).unwrap_or(snap)
+                }
                 Err(err) => Snapshot::error_with_code(err.to_string(), err.error_code()),
             },
             Err(err) => Snapshot::error_with_code(err.to_string(), err.error_code()),
@@ -238,7 +261,7 @@ fn main() {
         Command::Week { date } => {
             let out = match Vault::resolve(vault_arg, archive_arg) {
                 Ok(vault) => match parse_date(date) {
-                    Ok(d) => match week_summary(&vault, d) {
+                    Ok(d) => match week_summary_with(&vault, d, filter) {
                         Ok(w) => w,
                         Err(err) => WeekSummary::error(err.to_string(), err.error_code()),
                     },
@@ -251,7 +274,7 @@ fn main() {
         Command::Month { date } => {
             let out = match Vault::resolve(vault_arg, archive_arg) {
                 Ok(vault) => match parse_date(date) {
-                    Ok(d) => match month_summary(&vault, d) {
+                    Ok(d) => match month_summary_with(&vault, d, filter) {
                         Ok(w) => w,
                         Err(err) => WeekSummary::error(err.to_string(), err.error_code()),
                     },
@@ -261,15 +284,48 @@ fn main() {
             };
             emit_json(&out);
         }
-        Command::CarryOver { date } => emit(run(vault_arg, archive_arg, carry_over, date)),
-        Command::Open { date } => emit(run(vault_arg, archive_arg, open_in_obsidian, date)),
+        Command::CarryOver { date } => emit(then_snapshot(
+            vault_arg,
+            archive_arg,
+            date,
+            filter,
+            carry_over,
+        )),
+        Command::Open { date } => emit(then_snapshot(
+            vault_arg,
+            archive_arg,
+            date,
+            filter,
+            open_in_obsidian,
+        )),
         Command::SetNotes { text, date } => emit(run(
             vault_arg,
             archive_arg,
-            |vault, d| set_notes(vault, d, notes_heading.as_deref(), &text),
+            |vault, d| set_notes_with(vault, d, filter, &text),
             date,
         )),
     }
+}
+
+fn then_snapshot<F>(
+    vault_arg: Option<PathBuf>,
+    archive_arg: Option<String>,
+    date: Option<String>,
+    filter: SnapshotFilter<'_>,
+    f: F,
+) -> Snapshot
+where
+    F: FnOnce(&Vault, NaiveDate) -> Result<Snapshot, obsidian_daily_qs::VaultError>,
+{
+    run(
+        vault_arg,
+        archive_arg,
+        |vault, d| {
+            f(vault, d)?;
+            read_snapshot_with(vault, d, filter)
+        },
+        date,
+    )
 }
 
 fn run<F>(

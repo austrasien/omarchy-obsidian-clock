@@ -10,7 +10,7 @@ use chrono::Local;
 
 use crate::config::Vault;
 use crate::status::Snapshot;
-use crate::todos::read_snapshot_filtered;
+use crate::todos::{SnapshotFilter, read_snapshot_with};
 
 const POLL: Duration = Duration::from_secs(1);
 
@@ -20,6 +20,7 @@ pub fn watch(
     cli_archive: Option<String>,
     heading: Option<String>,
     notes_heading: Option<String>,
+    notes_h2_count: Option<usize>,
 ) {
     let mut last_key: Option<String> = None;
     loop {
@@ -28,6 +29,7 @@ pub fn watch(
             cli_archive.clone(),
             heading.as_deref(),
             notes_heading.as_deref(),
+            notes_h2_count,
         );
         let key = snapshot_key(&snap);
         if last_key.as_ref() != Some(&key) {
@@ -45,11 +47,20 @@ pub fn current_snapshot(
     cli_archive: Option<String>,
     heading: Option<&str>,
     notes_heading: Option<&str>,
+    notes_h2_count: Option<usize>,
 ) -> Snapshot {
     match Vault::resolve(cli_vault, cli_archive) {
         Ok(vault) => {
             let date = Local::now().date_naive();
-            match read_snapshot_filtered(&vault, date, heading, notes_heading) {
+            match read_snapshot_with(
+                &vault,
+                date,
+                SnapshotFilter {
+                    todo_heading: heading,
+                    notes_heading,
+                    notes_h2_count,
+                },
+            ) {
                 Ok(snap) => snap,
                 Err(err) => Snapshot::error_with_code(err.to_string(), err.error_code()),
             }
@@ -97,6 +108,7 @@ mod tests {
             done_count: Some(0),
             todos: Some(Vec::new()),
             notes: Some(String::new()),
+            sections: None,
             obsidian_uri: None,
             carry_over_count: Some(carry),
             is_today: Some(true),

@@ -25,6 +25,12 @@ pub struct TodoItem {
     pub parent_line: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NoteSection {
+    pub heading: String,
+    pub body: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Snapshot {
     pub state: State,
@@ -43,6 +49,9 @@ pub struct Snapshot {
     /// Free-form markdown under the notes heading (default: Notes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// Every `##` section in the daily note (heading + body).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Vec<NoteSection>>,
     /// Absolute `obsidian://open?path=…` URI for the daily note path.
     #[serde(rename = "obsidianUri", skip_serializing_if = "Option::is_none")]
     pub obsidian_uri: Option<String>,
@@ -108,6 +117,7 @@ impl Snapshot {
             done_count: None,
             todos: None,
             notes: None,
+            sections: None,
             obsidian_uri: None,
             carry_over_count: None,
             is_today: None,
@@ -130,6 +140,7 @@ impl Snapshot {
             done_count: Some(done_count),
             todos: Some(todos),
             notes: None,
+            sections: None,
             obsidian_uri: None,
             carry_over_count: None,
             is_today: None,

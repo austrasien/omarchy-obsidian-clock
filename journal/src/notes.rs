@@ -81,10 +81,144 @@ fn extract_whole_note_journal(content: &str) -> String {
     trim_section_body(&body)
 }
 
-/// True when the journal body has at least one non-empty line. Checkbox-only
-/// notes yield an empty body after extract, so they do not count.
+/// True when the journal body has at least one non-empty, non-heading line.
+/// Heading-only cartouches (`## Notes` with no prose) do not count.
 pub fn has_journal_body(notes: &str) -> bool {
-    notes.lines().any(|line| !line.trim().is_empty())
+    let re = heading_re();
+    notes.lines().any(|line| {
+        let t = line.trim();
+        !t.is_empty() && !re.is_match(line)
+    })
+}
+
+fn is_h2_heading(line: &str) -> bool {
+    heading_re()
+        .captures(line)
+        .is_some_and(|caps| caps[1].len() == 2)
+}
+
+/// 0-based indices of `##` headings, skipping fenced code.
+fn h2_heading_indices(lines: &[&str]) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut in_fence = false;
+    for (i, line) in lines.iter().enumerate() {
+        if is_fence_tick(line) {
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence && is_h2_heading(line) {
+            starts.push(i);
+        }
+    }
+    starts
+}
+
+fn section_end_after_h2(lines: &[&str], heading_idx: usize) -> usize {
+    let re = heading_re();
+    let mut j = heading_idx + 1;
+    let mut in_fence = false;
+    while j < lines.len() {
+        if is_fence_tick(lines[j]) {
+            in_fence = !in_fence;
+        } else if !in_fence
+            && let Some(next) = re.captures(lines[j])
+            && next[1].len() <= 2
+        {
+            break;
+        }
+        j += 1;
+    }
+    j
+}
+
+/// Inclusive start / exclusive end of the first `n` `##` sections
+/// (heading lines included). `None` when the note has no `##`.
+fn first_h2_span(lines: &[&str], n: usize) -> Option<(usize, usize)> {
+    if n == 0 {
+        return None;
+    }
+    let starts = h2_heading_indices(lines);
+    if starts.is_empty() {
+        return None;
+    }
+    let start = starts[0];
+    let last = starts[n.min(starts.len()) - 1];
+    Some((start, section_end_after_h2(lines, last)))
+}
+
+/// Every `##` section as `(heading, body)` pairs. The heading line is not
+/// included in the body; `###` subsections stay inside their parent.
+pub fn extract_h2_sections(content: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = content.lines().collect();
+    let starts = h2_heading_indices(&lines);
+    let re = heading_re();
+    let mut out = Vec::with_capacity(starts.len());
+    for &idx in &starts {
+        let title = re
+            .captures(lines[idx])
+            .map(|caps| caps[2].trim().to_string())
+            .unwrap_or_default();
+        let end = section_end_after_h2(&lines, idx);
+        let body = if idx + 1 < end {
+            trim_section_body(&lines[idx + 1..end].join("\n"))
+        } else {
+            String::new()
+        };
+        out.push((title, body));
+    }
+    out
+}
+
+/// First `n` `##` sections, including the heading lines themselves.
+/// Empty when the note has no `##`.
+pub fn extract_first_h2_sections(content: &str, n: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    let Some((start, end)) = first_h2_span(&lines, n) else {
+        return String::new();
+    };
+    trim_section_body(&lines[start..end].join("\n"))
+}
+
+/// Replace the span covering the first `n` `##` sections. The rest of the
+/// note (Tasks, reviews, …) is left untouched. When the note has no `##`,
+/// the new body is prepended.
+pub fn replace_first_h2_sections(content: &str, n: usize, new_body: &str) -> String {
+    let body = new_body.trim_end();
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out: Vec<String> = Vec::new();
+    if let Some((start, end)) = first_h2_span(&lines, n) {
+        for line in lines.iter().take(start) {
+            out.push((*line).to_string());
+        }
+        if !body.is_empty() {
+            for line in body.lines() {
+                out.push(line.to_string());
+            }
+        }
+        for line in lines.iter().skip(end) {
+            out.push((*line).to_string());
+        }
+    } else {
+        if !body.is_empty() {
+            for line in body.lines() {
+                out.push(line.to_string());
+            }
+        }
+        if !lines.is_empty() && out.last().is_none_or(|s| !s.is_empty()) {
+            out.push(String::new());
+        }
+        for line in &lines {
+            out.push((*line).to_string());
+        }
+    }
+    let mut next = out.join("\n");
+    if !next.ends_with('\n') {
+        next.push('\n');
+    }
+    next
 }
 
 fn merge_journal_preserving_checkboxes(content: &str, new_body: &str) -> String {
@@ -134,22 +268,23 @@ pub fn extract_section(content: &str, heading: &str) -> String {
 }
 
 fn trim_section_body(body: &str) -> String {
-    // Drop a single leading blank line (common after headings) and trailing
-    // whitespace, but keep intentional internal blank lines.
-    let mut s = body.to_string();
-    if s.starts_with('\n') {
-        s = s[1..].to_string();
+    let mut lines: Vec<&str> = body.lines().collect();
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
     }
-    s.trim_end().to_string()
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n")
 }
 
 /// Replace the body under `heading`, or append a new `## heading` section.
 /// Empty heading rewrites the journal while keeping checkbox todos.
 pub fn replace_or_append_section(content: &str, heading: &str, new_body: &str) -> String {
     let heading = heading.trim();
-    let body = new_body.trim_end();
+    let body = trim_section_body(new_body);
     if heading.is_empty() {
-        return merge_journal_preserving_checkboxes(content, body);
+        return merge_journal_preserving_checkboxes(content, &body);
     }
     let lines: Vec<&str> = content.lines().collect();
     let mut out: Vec<String> = Vec::new();
@@ -158,16 +293,8 @@ pub fn replace_or_append_section(content: &str, heading: &str, new_body: &str) -
         for line in lines.iter().take(heading_idx + 1) {
             out.push((*line).to_string());
         }
-        // Keep one blank line after the heading when the body is non-empty.
-        if !body.is_empty() {
-            out.push(String::new());
-            for line in body.lines() {
-                out.push(line.to_string());
-            }
-        }
-        // Keep a blank-line boundary before the next peer heading when present.
-        if end < lines.len() && out.last().is_none_or(|s| !s.is_empty()) {
-            out.push(String::new());
+        for line in body.lines() {
+            out.push(line.to_string());
         }
         for line in lines.iter().skip(end) {
             out.push((*line).to_string());
@@ -177,15 +304,9 @@ pub fn replace_or_append_section(content: &str, heading: &str, new_body: &str) -
         while out.last().is_some_and(|s| s.is_empty()) {
             out.pop();
         }
-        if !out.is_empty() {
-            out.push(String::new());
-        }
         out.push(format!("## {heading}"));
-        out.push(String::new());
-        if !body.is_empty() {
-            for line in body.lines() {
-                out.push(line.to_string());
-            }
+        for line in body.lines() {
+            out.push(line.to_string());
         }
     }
 
@@ -202,7 +323,8 @@ mod tests {
 
     #[test]
     fn extracts_notes_section() {
-        let content = "# Day\n\n## Todos\n\n- [ ] a\n\n## Notes\n\nHello\n\nWorld\n\n## Later\n\nx\n";
+        let content =
+            "# Day\n\n## Todos\n\n- [ ] a\n\n## Notes\n\nHello\n\nWorld\n\n## Later\n\nx\n";
         assert_eq!(extract_section(content, "Notes"), "Hello\n\nWorld");
         assert_eq!(extract_section(content, "missing"), "");
         assert_eq!(
@@ -245,7 +367,7 @@ mod tests {
     fn replaces_existing_notes() {
         let content = "# Day\n\n## Notes\n\nold\n\n## Other\n\nz\n";
         let next = replace_or_append_section(content, "Notes", "new\nline");
-        assert_eq!(next, "# Day\n\n## Notes\n\nnew\nline\n\n## Other\n\nz\n");
+        assert_eq!(next, "# Day\n\n## Notes\nnew\nline\n## Other\n\nz\n");
     }
 
     #[test]
@@ -254,13 +376,85 @@ mod tests {
         let next = replace_or_append_section(content, "Notes", "journal");
         assert_eq!(
             next,
-            "# Day\n\n## Todos\n\n- [ ] a\n\n## Notes\n\njournal\n"
+            "# Day\n\n## Todos\n\n- [ ] a\n## Notes\njournal\n"
         );
     }
 
     #[test]
     fn ignores_heading_inside_fence() {
         let content = "## Notes\n\n```\n## Fake\n```\n\nreal\n\n## Next\n";
-        assert_eq!(extract_section(content, "Notes"), "```\n## Fake\n```\n\nreal");
+        assert_eq!(
+            extract_section(content, "Notes"),
+            "```\n## Fake\n```\n\nreal"
+        );
+    }
+
+    fn daily_template_note() -> &'static str {
+        "## Notes\n\
+         ## Links / captured ideas\n\
+         - a captured link\n\
+         ## Tasks\n\
+         - [x] a real task\n\
+         ## Morning review\n\
+         - [ ] Lire une méditation stoïque\n\
+         ## Nightly review\n\
+         - [ ] Regarder l’agenda de demain\n"
+    }
+
+    #[test]
+    fn extracts_each_h2_body_including_review_checkboxes() {
+        let sections = extract_h2_sections(daily_template_note());
+        assert_eq!(
+            sections.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(),
+            [
+                "Notes",
+                "Links / captured ideas",
+                "Tasks",
+                "Morning review",
+                "Nightly review"
+            ]
+        );
+        assert_eq!(sections[0].1, "");
+        assert_eq!(sections[1].1, "- a captured link");
+        assert_eq!(sections[2].1, "- [x] a real task");
+        assert_eq!(sections[3].1, "- [ ] Lire une méditation stoïque");
+        assert_eq!(sections[4].1, "- [ ] Regarder l’agenda de demain");
+    }
+
+    #[test]
+    fn extracts_first_two_h2_sections_including_headings() {
+        let body = extract_first_h2_sections(daily_template_note(), 2);
+        assert_eq!(
+            body,
+            "## Notes\n## Links / captured ideas\n- a captured link"
+        );
+        assert!(has_journal_body(&body));
+        assert!(!body.contains("Tasks"));
+        assert!(!body.contains("méditation"));
+        assert!(!has_journal_body("## Notes\n## Links / captured ideas"));
+    }
+
+    #[test]
+    fn replace_first_two_h2_leaves_tasks_and_reviews() {
+        let next = replace_first_h2_sections(
+            daily_template_note(),
+            2,
+            "## Notes\n- a thought\n## Links / captured ideas\n- a captured link",
+        );
+        assert!(
+            next.starts_with(
+                "## Notes\n- a thought\n## Links / captured ideas\n- a captured link\n"
+            )
+        );
+        assert!(next.contains("## Tasks\n- [x] a real task\n"));
+        assert!(next.contains("## Morning review\n- [ ] Lire une méditation stoïque\n"));
+        assert!(next.contains("## Nightly review\n"));
+    }
+
+    #[test]
+    fn replace_section_has_no_padding_blank_lines() {
+        let content = "## Notes\n\ntest\n\n## Links / captured ideas\n";
+        let next = replace_or_append_section(content, "Notes", "test\n");
+        assert_eq!(next, "## Notes\ntest\n## Links / captured ideas\n");
     }
 }

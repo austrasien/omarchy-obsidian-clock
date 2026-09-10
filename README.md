@@ -2,7 +2,7 @@
 
 An [Omarchy](https://omarchy.org/) **bar clock** whose calendar popup shows that day’s **Obsidian daily note** — todos as checkboxes, journal as a scrollable editor.
 
-> **⚡ Built for Omarchy:** clone of the stock `omarchy.clock`. Click a day in the month grid to load `Journals/YYYY-MM-DD.md` (or whatever folder your vault’s Daily Notes plugin uses).
+> **⚡ Built for Omarchy:** clone of the stock `omarchy.clock`. Click a day in the month grid to load that day’s note (folder and filename come from your vault’s Daily Notes plugin).
 
 ```
 Bar date  →  calendar popup  →  click a day  →  that day's Obsidian journal
@@ -35,26 +35,56 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 | **See the month** | Yes | Yes |
 | **Open that day’s journal** | No | Click the day |
 | **Todos** | — | Dots under the date for **open** tasks (max 5); checked items only in the popup |
-| **Journal text** | — | Scrollable editor (checkbox-only days stay “no note”) |
+| **Journal text** | — | One tab per `##` section (Notes, Links, Tasks, morning/nightly review) |
 | **Omarchy** | Built-in | User plugin; disable `omarchy.clock` |
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
+
+## What’s new in 1.3
+
+v1.2 only changed calendar dots (open todos). **1.3** is the per-section daily note:
+
+- **Five tabs** under the month grid: Notes · Links · Tasks · morning (sun) · nightly (moon). Default tab is Notes. No date title in that block; **↗** on the right opens the note in Obsidian.
+- The widget matches **`##` titles**, not heading order. Each tab reads and writes **that section only**. Other `##` blocks are left untouched.
+- **Calendar:** in-month days turn white when Notes or Links have prose. Dots are **open Tasks only** (max 5). Review checkboxes never become dots.
+- **Autosave** after a short pause. The caret stays where you type; Enter starts a new line instead of jumping to the start of the field.
+- **Compact markdown:** no blank line after a `##`, none before the next `##`. A newline in the editor is a newline in the file.
+
+## Daily note headings
+
+Put these `##` titles in the daily note. The popup matches **by title** (not by order). Anything else under a different `##` is left alone.
+
+| `##` title | Also recognized | Checkboxes | Calendar |
+| :--- | :--- | :--- | :--- |
+| **Notes** | exactly `Notes` | Not todos. The Notes tab is a text editor; a `- [ ]` line there is just markdown. | No dots. Non-empty prose here (or under Links) turns that in-month day **white**. |
+| **Links / captured ideas** | title contains `link`, `captured`, or `idée` / `idee` | Same as Notes (Links tab). | Same as Notes. |
+| **Tasks** | `Todos`, `Tâches` | **The todo list.** Toggle in the Tasks tab; **Add a todo** only exists here. | One dot per **open** `- [ ]` (max 5). Done items stay in the list, not on the grid. |
+| **Morning review** | title contains `morning` or `matinal` | Only the **leading** run of `- [ ]` / `- [x]` under the heading is interactive (same look as Tasks). No add field. | Not dots. Not white-day prose. |
+| **Nightly review** | title contains `night`, `nightly`, or `nocturne` | Same as Morning review. | Not dots. Not white-day prose. |
+
+Leading review checkboxes means: from the first non-empty line, consecutive checkbox lines only. The first line that is not a checkbox (a prompt, a `###`, a paragraph) starts the text editor for that tab.
+
+Writes replace that one section only. No extra blank line after the `##` or before the next `##`; a newline in the editor is a newline in the file.
 
 ## ✨ Key Features
 
 ### 📅 Month grid
 - ISO week numbers; click **W** to change week start.
 - Click the big date heading to jump back to today.
-- Days **in the current month** with journal prose (at least one non-checkbox line) render in white; other month days stay muted. Adjacent-month cells stay grey even if those files have notes.
-- Up to five dots under a day, one per **open** checkbox (done items stay in the day panel only).
+- In-month days with Notes/Links prose render in white; other month days stay muted. Adjacent-month cells stay grey even if those files have notes.
+- Up to five dots under a day, one per open Tasks item.
 
-### ✅ Todos + journal
-- Toggle todos, add one from the footer field.
-- Journal `TextArea` scrolls when the note is long; autosave after a short pause.
-- Diagonal arrow opens the note in Obsidian.
+### ✅ Popup
+- Tab row: **Notes** · **Links** · **Tasks** · sun (morning review) · moon (nightly review). Default: Notes.
+- Notes / Links: text editor for that section’s body.
+- Tasks: checkbox list + **Add a todo…** (only on this tab). Nested items keep their indent.
+- Morning / nightly: leading checkboxes as a list (toggle, no add field); the rest of the section (prompts, `###`, prose) in the editor below.
+- Autosave after a short pause. A **Saving…** hint appears while dirty. The caret is not reset on save, so Enter keeps a second line.
+- ↗ opens the selected day in Obsidian (creates the note from the vault’s Daily Notes template if it is missing).
 
 ### 🔌 Backend (bundled)
-- Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed shim) for `status`, `month`, `set-notes`, `add`, `toggle`, `open`.
+- Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed copy) for `status`, `month`, `set-notes`, `add`, `toggle`, `open`.
+- `status` returns every `##` as `{heading, body}`. `set-notes --notes-heading <title>` replaces that body only.
 - Rust sources live under `journal/` (Apache-2.0 fork of [obsidian-daily-qs](https://github.com/LucaNerlich/obsidian-daily-qs) with whole-note journal mode).
 - Optional override: `journalBin`. No separate `austraz.obsidian-daily` / marketplace daily plugin required.
 
@@ -99,7 +129,7 @@ omarchy-shell shell rescanPlugins
 
 ## 📂 Where to set your Obsidian vault path
 
-The plugin does **not** guess your vault. After install, set **`vaultPath`** to the **absolute** folder that contains `.obsidian/` (the vault root — not a single note, not `Journals/` alone).
+The plugin does **not** guess your vault. After install, set **`vaultPath`** to the **absolute** folder that contains `.obsidian/` (the vault root — not a single note, not the daily-notes folder alone).
 
 **Recommended** (terminal):
 
@@ -120,7 +150,7 @@ Replace `MyVault` with your vault directory. Example: if notes live in `/home/yo
 
 That file is the only place the path is stored. It is user config (`~/.config/omarchy/`), never this git repo.
 
-Daily-note **folder and filename** still come from the vault’s Daily Notes plugin (`.obsidian/daily-notes.json`, e.g. `"folder": "Journals"`).
+Daily-note **folder and filename** still come from the vault’s Daily Notes plugin (`.obsidian/daily-notes.json`).
 
 Then:
 

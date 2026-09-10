@@ -8,12 +8,40 @@ use chrono::NaiveDate;
 use regex::Regex;
 
 use crate::config::{DailyNotesConfig, Vault, VaultError};
-use crate::notes::{extract_section, replace_or_append_section};
+use crate::notes::{
+    extract_first_h2_sections, extract_h2_sections, extract_section, replace_first_h2_sections,
+    replace_or_append_section,
+};
 use crate::open;
-use crate::status::{Snapshot, TodoItem};
+use crate::status::{NoteSection, Snapshot, TodoItem};
 
 /// Default notes heading: empty means the whole daily note is the journal.
 pub const DEFAULT_NOTES_HEADING: &str = "";
+
+/// How to pick todos and the free-form notes pane for a snapshot.
+#[derive(Clone, Copy, Default)]
+pub struct SnapshotFilter<'a> {
+    /// Only todos under this `##` heading (e.g. `Tasks`). `None` = every checkbox.
+    pub todo_heading: Option<&'a str>,
+    /// Named notes heading. Ignored when [`Self::notes_h2_count`] is set.
+    pub notes_heading: Option<&'a str>,
+    /// First N `##` sections, headings included. Overrides `notes_heading`.
+    pub notes_h2_count: Option<usize>,
+}
+
+impl SnapshotFilter<'_> {
+    fn notes_from(&self, content: &str) -> String {
+        if let Some(n) = self.notes_h2_count.filter(|n| *n > 0) {
+            extract_first_h2_sections(content, n)
+        } else {
+            let notes_h = self
+                .notes_heading
+                .map(str::trim)
+                .unwrap_or(DEFAULT_NOTES_HEADING);
+            extract_section(content, notes_h)
+        }
+    }
+}
 
 fn checkbox_re() -> Regex {
     Regex::new(r"^(\s*)([-*+])\s+\[([ xX])\](\s+)(.*)$").expect("checkbox regex")
@@ -75,7 +103,7 @@ pub fn parse_todos(content: &str) -> Vec<TodoItem> {
 }
 
 pub fn read_snapshot(vault: &Vault, date: NaiveDate) -> Result<Snapshot, VaultError> {
-    read_snapshot_filtered(vault, date, None, None)
+    read_snapshot_with(vault, date, SnapshotFilter::default())
 }
 
 /// Resolve the path of `date`'s note: the live daily-notes folder wins, but a
@@ -99,27 +127,45 @@ pub fn read_snapshot_filtered(
     heading: Option<&str>,
     notes_heading: Option<&str>,
 ) -> Result<Snapshot, VaultError> {
+    read_snapshot_with(
+        vault,
+        date,
+        SnapshotFilter {
+            todo_heading: heading,
+            notes_heading,
+            notes_h2_count: None,
+        },
+    )
+}
+
+pub fn read_snapshot_with(
+    vault: &Vault,
+    date: NaiveDate,
+    filter: SnapshotFilter<'_>,
+) -> Result<Snapshot, VaultError> {
     let config = vault.daily_notes_config()?;
     let path = resolved_note_path(vault, &config, date)?;
     let date_str = date.format("%Y-%m-%d").to_string();
     let path_str = path.display().to_string();
-    let notes_h = notes_heading
-        .map(str::trim)
-        .unwrap_or(DEFAULT_NOTES_HEADING);
-    let (todos, notes) = if path.exists() {
+    let (todos, notes, sections) = if path.exists() {
         let content = fs::read_to_string(&path)
             .map_err(|e| VaultError::Io(format!("failed to read {}: {e}", path.display())))?;
         let all = parse_todos(&content);
         (
-            filter_todos_by_heading(&content, all, heading),
-            extract_section(&content, notes_h),
+            filter_todos_by_heading(&content, all, filter.todo_heading),
+            filter.notes_from(&content),
+            extract_h2_sections(&content)
+                .into_iter()
+                .map(|(heading, body)| NoteSection { heading, body })
+                .collect::<Vec<_>>(),
         )
     } else {
-        (Vec::new(), String::new())
+        (Vec::new(), String::new(), Vec::new())
     };
     let exists = path.exists();
     let mut snap = Snapshot::ok(date_str, path_str, exists, todos);
     snap.notes = Some(notes);
+    snap.sections = Some(sections);
     enrich_snapshot(vault, date, &path, &config, &mut snap)?;
     Ok(snap)
 }
@@ -132,7 +178,25 @@ pub fn set_notes(
     notes_heading: Option<&str>,
     body: &str,
 ) -> Result<Snapshot, VaultError> {
-    let notes_h = notes_heading
+    set_notes_with(
+        vault,
+        date,
+        SnapshotFilter {
+            notes_heading,
+            ..SnapshotFilter::default()
+        },
+        body,
+    )
+}
+
+pub fn set_notes_with(
+    vault: &Vault,
+    date: NaiveDate,
+    filter: SnapshotFilter<'_>,
+    body: &str,
+) -> Result<Snapshot, VaultError> {
+    let notes_h = filter
+        .notes_heading
         .map(str::trim)
         .unwrap_or(DEFAULT_NOTES_HEADING);
     if notes_h.contains('\n') || notes_h.contains('\r') {
@@ -143,9 +207,13 @@ pub fn set_notes(
     ensure_note(vault, &config, &path, date)?;
     let content = fs::read_to_string(&path)
         .map_err(|e| VaultError::Io(format!("failed to read {}: {e}", path.display())))?;
-    let next = replace_or_append_section(&content, notes_h, body);
+    let next = if let Some(n) = filter.notes_h2_count.filter(|n| *n > 0) {
+        replace_first_h2_sections(&content, n, body)
+    } else {
+        replace_or_append_section(&content, notes_h, body)
+    };
     write_atomic_with_undo(vault, date, &path, &content, &next)?;
-    read_snapshot_filtered(vault, date, None, Some(notes_h))
+    read_snapshot_with(vault, date, filter)
 }
 
 fn filter_todos_by_heading(
@@ -706,6 +774,14 @@ pub fn week_summary(
     vault: &Vault,
     anchor: NaiveDate,
 ) -> Result<crate::status::WeekSummary, VaultError> {
+    week_summary_with(vault, anchor, SnapshotFilter::default())
+}
+
+pub fn week_summary_with(
+    vault: &Vault,
+    anchor: NaiveDate,
+    filter: SnapshotFilter<'_>,
+) -> Result<crate::status::WeekSummary, VaultError> {
     use crate::status::{DaySummary, WeekSummary};
     use chrono::Datelike;
     let today = chrono::Local::now().date_naive();
@@ -718,7 +794,7 @@ pub fn week_summary(
         let d = monday
             .checked_add_days(chrono::Days::new(offset))
             .unwrap_or(monday);
-        let snap = read_snapshot(vault, d)?;
+        let snap = read_snapshot_with(vault, d, filter)?;
         days.push(DaySummary {
             date: d.format("%Y-%m-%d").to_string(),
             open_count: snap.open_count.unwrap_or(0),
@@ -743,6 +819,14 @@ pub fn month_summary(
     vault: &Vault,
     anchor: NaiveDate,
 ) -> Result<crate::status::WeekSummary, VaultError> {
+    month_summary_with(vault, anchor, SnapshotFilter::default())
+}
+
+pub fn month_summary_with(
+    vault: &Vault,
+    anchor: NaiveDate,
+    filter: SnapshotFilter<'_>,
+) -> Result<crate::status::WeekSummary, VaultError> {
     use crate::status::{DaySummary, WeekSummary};
     use chrono::Datelike;
     let today = chrono::Local::now().date_naive();
@@ -764,7 +848,7 @@ pub fn month_summary(
         let d = first
             .checked_add_days(chrono::Days::new(offset))
             .unwrap_or(first);
-        let snap = read_snapshot(vault, d)?;
+        let snap = read_snapshot_with(vault, d, filter)?;
         days.push(DaySummary {
             date: d.format("%Y-%m-%d").to_string(),
             open_count: snap.open_count.unwrap_or(0),
@@ -1761,11 +1845,15 @@ mod tests {
         set_notes(&vault, date, Some("Notes"), "hello\n\nworld").unwrap();
         assert_eq!(
             fs::read_to_string(&note).unwrap(),
-            "# Day\n\n## Todos\n\n- [ ] a\n\n## Notes\n\nhello\n\nworld\n"
+            "# Day\n\n## Todos\n\n- [ ] a\n## Notes\nhello\n\nworld\n"
         );
         let snap = set_notes(&vault, date, Some("Notes"), "updated").unwrap();
         assert_eq!(snap.notes.as_deref(), Some("updated"));
-        assert!(fs::read_to_string(&note).unwrap().contains("## Notes\n\nupdated\n"));
+        assert!(
+            fs::read_to_string(&note)
+                .unwrap()
+                .contains("## Notes\nupdated\n")
+        );
         assert!(fs::read_to_string(&note).unwrap().contains("- [ ] a\n"));
         let _ = fs::remove_dir_all(vault.root());
     }
@@ -1775,10 +1863,95 @@ mod tests {
         let content = "# Day\n\n## Notes\n\njournal entry\n\n## Todos\n\n- [ ] a\n";
         let (vault, date, _) = vault_with(content);
         let snap = read_snapshot(&vault, date).unwrap();
-        assert_eq!(snap.notes.as_deref(), Some("# Day\n\n## Notes\n\njournal entry"));
+        assert_eq!(
+            snap.notes.as_deref(),
+            Some("# Day\n\n## Notes\n\njournal entry")
+        );
         assert_eq!(snap.todos.as_ref().unwrap().len(), 1);
         let snap = read_snapshot_filtered(&vault, date, None, Some("Notes")).unwrap();
         assert_eq!(snap.notes.as_deref(), Some("journal entry"));
+        let _ = fs::remove_dir_all(vault.root());
+    }
+
+    fn daily_plugin_filter() -> SnapshotFilter<'static> {
+        SnapshotFilter {
+            todo_heading: Some("Tasks"),
+            notes_heading: None,
+            notes_h2_count: Some(2),
+        }
+    }
+
+    #[test]
+    fn daily_template_todos_only_under_tasks() {
+        let content = "## Notes\n\
+                       ## Links / captured ideas\n\
+                       - a captured link\n\
+                       ## Tasks\n\
+                       - [x] configure sync\n\
+                       - [ ] ship the plugin\n\
+                       ## Morning review\n\
+                       - [ ] Lire une méditation stoïque\n\
+                       ## Nightly review\n\
+                       - [ ] Regarder l’agenda\n";
+        let (vault, date, note) = vault_with(content);
+        let filter = daily_plugin_filter();
+        let snap = read_snapshot_with(&vault, date, filter).unwrap();
+        let todos = snap.todos.unwrap();
+        assert_eq!(todos.len(), 2);
+        assert_eq!(todos[0].text, "configure sync");
+        assert!(todos[0].checked);
+        assert_eq!(todos[1].text, "ship the plugin");
+        assert!(!todos[1].checked);
+        assert_eq!(
+            snap.notes.as_deref(),
+            Some("## Notes\n## Links / captured ideas\n- a captured link")
+        );
+        let headings: Vec<&str> = snap
+            .sections
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|s| s.heading.as_str())
+            .collect();
+        assert_eq!(
+            headings,
+            [
+                "Notes",
+                "Links / captured ideas",
+                "Tasks",
+                "Morning review",
+                "Nightly review"
+            ]
+        );
+        assert_eq!(
+            snap.sections.as_ref().unwrap()[3].body,
+            "- [ ] Lire une méditation stoïque"
+        );
+        let month = month_summary_with(&vault, date, filter).unwrap();
+        let day = month
+            .days
+            .unwrap()
+            .into_iter()
+            .find(|d| d.date == date.format("%Y-%m-%d").to_string())
+            .unwrap();
+        assert_eq!(day.open_count, 1);
+        assert_eq!(day.done_count, 1);
+        assert!(day.has_notes);
+
+        let updated = set_notes_with(
+            &vault,
+            date,
+            filter,
+            "## Notes\n- hello\n## Links / captured ideas\n- a captured link",
+        )
+        .unwrap();
+        assert_eq!(
+            updated.notes.as_deref(),
+            Some("## Notes\n- hello\n## Links / captured ideas\n- a captured link")
+        );
+        let file = fs::read_to_string(&note).unwrap();
+        assert!(file.contains("## Tasks\n- [x] configure sync\n"));
+        assert!(file.contains("## Morning review\n- [ ] Lire une méditation stoïque\n"));
         let _ = fs::remove_dir_all(vault.root());
     }
 }
