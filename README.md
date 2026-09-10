@@ -34,7 +34,7 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 | :--- | :--- | :--- |
 | **See the month** | Yes | Yes |
 | **Open that day’s journal** | No | Click the day |
-| **Todos** | — | Dots under the date (max 5); checkboxes in the popup |
+| **Todos** | — | Dots under the date for **open** tasks (max 5); checked items only in the popup |
 | **Journal text** | — | Scrollable editor (checkbox-only days stay “no note”) |
 | **Omarchy** | Built-in | User plugin; disable `omarchy.clock` |
 
@@ -46,7 +46,7 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 - ISO week numbers; click **W** to change week start.
 - Click the big date heading to jump back to today.
 - Days **in the current month** with journal prose (at least one non-checkbox line) render in white; other month days stay muted. Adjacent-month cells stay grey even if those files have notes.
-- Up to five dots under a day, one per checkbox todo.
+- Up to five dots under a day, one per **open** checkbox (done items stay in the day panel only).
 
 ### ✅ Todos + journal
 - Toggle todos, add one from the footer field.

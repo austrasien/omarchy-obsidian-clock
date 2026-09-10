@@ -276,7 +276,7 @@ Panel {
     var table = marks || root.monthMarks
     var mark = table ? table[cell.key] : null
     if (!mark) return 0
-    var n = (Number(mark.openCount) || 0) + (Number(mark.doneCount) || 0)
+    var n = Number(mark.openCount) || 0
     if (n < 1) return 0
     return Math.min(5, Math.floor(n))
   }
