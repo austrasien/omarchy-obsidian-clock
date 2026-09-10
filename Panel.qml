@@ -177,17 +177,31 @@ Panel {
     return "'" + String(s).replace(/'/g, "'\\''") + "'"
   }
 
+  function decodeFileUrl(urlString) {
+    var path = String(urlString).replace(/^file:\/\//, "")
+    try {
+      return decodeURIComponent(path)
+    } catch (e) {
+      return path
+    }
+  }
+
+  // Bundled with this plugin under bin/ (see journal/ for the Rust sources).
+  readonly property string bundledJournalBin: root.hostArch === "" ? "" : root.decodeFileUrl(
+    Qt.resolvedUrl("bin/obsidian-daily-qs-" + root.hostArch).toString())
+
   function resolveJournalBin() {
     var arch = root.hostArch
     var configured = String(setting("journalBin", "") || "").trim()
+    var bundled = root.bundledJournalBin
     var prefix = ""
     if (configured !== "")
-      prefix = "[ -x " + root.shellQuote(configured) + " ] && { printf '%s\\n' " + root.shellQuote(configured) + "; exit 0; }; "
+      prefix += "[ -x " + root.shellQuote(configured) + " ] && { printf '%s\\n' " + root.shellQuote(configured) + "; exit 0; }; "
+    if (bundled !== "")
+      prefix += "[ -x " + root.shellQuote(bundled) + " ] && { printf '%s\\n' " + root.shellQuote(bundled) + "; exit 0; }; "
     binProbe.command = ["bash", "-c",
       prefix +
       "arch=" + root.shellQuote(arch) + "; " +
-      "for f in \"$HOME/.config/omarchy/plugins\"/*/omarchy/bin/obsidian-daily-qs-$arch; do " +
-      "[ -x \"$f\" ] && { printf '%s\\n' \"$f\"; exit 0; }; done; " +
       "command -v obsidian-daily-qs"]
     binProbe.running = true
   }
@@ -1317,7 +1331,7 @@ Panel {
     onExited: function(exitCode) {
       if (exitCode !== 0) {
         root.resolvedJournalBin = ""
-        root.journalError = "Journal backend missing — install obsidian-daily-qs or set journalBin"
+        root.journalError = "Journal backend missing — reinstall austraz.clock (bundled bin/) or set journalBin"
       }
     }
   }

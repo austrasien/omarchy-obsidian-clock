@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Exec the arch-specific journal backend bundled next to this shim.
+set -euo pipefail
+arch="$(uname -m)"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bin="$here/obsidian-daily-qs-$arch"
+if [[ ! -x "$bin" ]]; then
+  echo "obsidian-daily-qs: no binary for arch $arch at $bin" >&2
+  exit 127
+fi
+exec "$bin" "$@"

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "austraz.clock",
   "name": "Obsidian Clock",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "austrasien (fork of Omarchy clock)",
   "license": "MIT",
   "description": "Date/time label with a calendar popup and Obsidian daily journal",
@@ -33,7 +33,7 @@
         "key": "journalBin",
         "type": "path",
         "label": "Journal backend binary",
-        "description": "Optional absolute path to obsidian-daily-qs. Leave empty to auto-detect an installed austraz.obsidian-daily plugin or a binary on PATH.",
+        "description": "Optional absolute path to the journal CLI. Leave empty to use the binary bundled under bin/obsidian-daily-qs-<arch>.",
         "defaultValue": ""
       }
     ]

@@ -1,0 +1,7 @@
+This product bundles a modified copy of obsidian-daily-qs
+(https://github.com/LucaNerlich/obsidian-daily-qs), licensed under the
+Apache License 2.0. See journal/LICENSE.
+
+Modifications (austrasien / austraz.clock):
+- Free-form notes / set-notes CLI (whole-note journal when notes heading is empty)
+- Bundled as the austraz.clock journal backend under bin/

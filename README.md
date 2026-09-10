@@ -53,9 +53,10 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 - Journal `TextArea` scrolls when the note is long; autosave after a short pause.
 - Diagonal arrow opens the note in Obsidian.
 
-### 🔌 Backend
-- Talks to `obsidian-daily-qs` (`status`, `month`, `set-notes`, `add`, `toggle`, `open`).
-- Auto-detects the binary under `~/.config/omarchy/plugins/*/omarchy/bin/` or on `PATH`. Optional override: `journalBin`.
+### 🔌 Backend (bundled)
+- Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed shim) for `status`, `month`, `set-notes`, `add`, `toggle`, `open`.
+- Rust sources live under `journal/` (Apache-2.0 fork of [obsidian-daily-qs](https://github.com/LucaNerlich/obsidian-daily-qs) with whole-note journal mode).
+- Optional override: `journalBin`. No separate `austraz.obsidian-daily` / marketplace daily plugin required.
 
 ## 🛠 Installation (Omarchy)
 
@@ -73,7 +74,7 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 
 2. **Point it at your Obsidian vault** (required — see the next section).
 
-3. **Journal backend:** install [obsidian-daily-qs](https://github.com/LucaNerlich/obsidian-daily-qs) (or a local fork) as an Omarchy plugin so `obsidian-daily-qs-<arch>` exists, **or** put `obsidian-daily-qs` on your `PATH`, **or** set `journalBin` (table below).
+3. Restart the shell if the bar does not pick it up:
 
 ```sh
 omarchy restart shell
@@ -84,6 +85,16 @@ omarchy restart shell
 ```sh
 omarchy plugin update austraz.clock
 omarchy plugin remove austraz.clock
+```
+
+If you previously installed a standalone `austraz.obsidian-daily` only for this clock, you can remove it after updating:
+
+```sh
+# Managed install:
+omarchy plugin remove austraz.obsidian-daily
+# Or a manual copy under ~/.config/omarchy/plugins/:
+rm -rf ~/.config/omarchy/plugins/austraz.obsidian-daily
+omarchy-shell shell rescanPlugins
 ```
 
 ## 📂 Where to set your Obsidian vault path
@@ -126,7 +137,7 @@ On the `austraz.clock` entry in `~/.config/omarchy/shell.json`, or via `omarchy 
 | Key | Default | Meaning |
 |---|---|---|
 | **`vaultPath`** | `""` | **Absolute Obsidian vault root.** Set this. |
-| `journalBin` | `""` | Optional absolute path to `obsidian-daily-qs`. Empty = auto-detect. |
+| `journalBin` | `""` | Optional absolute path to the journal CLI. Empty = bundled `bin/obsidian-daily-qs-<arch>`. |
 | `format` / `formatAlt` | clock strings | Bar label; right-click cycles formats. |
 | `weekStartDay` | locale | First day of the week (`W` on the grid toggles). |
 | `birthYear` / `lifeExpectancy` | unset | Optional “LIFE” bar (double-tap the year rail). |
@@ -143,7 +154,8 @@ The last line still works if this clone registered the stock clock IPC id.
 
 ## ⚖️ License
 
-Licensed under the **MIT License**. Calendar UI is a fork of Omarchy’s `omarchy.clock`. Journal I/O uses `obsidian-daily-qs` (Apache-2.0) as a separate backend — not bundled here.
+- **MIT** for the QML clock UI (fork of Omarchy’s `omarchy.clock`).
+- **Apache-2.0** for the bundled journal CLI under `journal/` / `bin/` — see `NOTICE` and `journal/LICENSE`.
 
 ---
 *Developed so a click on the Omarchy calendar opens that day’s Obsidian journal — without hardcoding anyone’s vault.*

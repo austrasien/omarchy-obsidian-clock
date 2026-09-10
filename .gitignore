@@ -2,3 +2,7 @@
 *.qmlc
 *~
 .DS_Store
+journal/target/
+journal/.cargo/
+journal/.rustup/
+journal/.cache/
