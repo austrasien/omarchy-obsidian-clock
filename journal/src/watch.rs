@@ -109,6 +109,7 @@ mod tests {
             todos: Some(Vec::new()),
             notes: Some(String::new()),
             sections: None,
+            template_headings: None,
             obsidian_uri: None,
             carry_over_count: Some(carry),
             is_today: Some(true),

@@ -124,7 +124,7 @@ BarWidget {
     id: panelLoader
     active: true
     // Query busts Quickshell's QML cache so Panel.qml edits actually load.
-    source: Qt.resolvedUrl("Panel.qml") + "?rev=review-hyphen-text-1"
+    source: Qt.resolvedUrl("Panel.qml") + "?rev=1.4"
     visible: false
     onLoaded: {
       root.injectPanel()

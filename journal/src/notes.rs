@@ -169,6 +169,15 @@ pub fn extract_h2_sections(content: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Titles of `##` headings, in file order, capped at `limit`.
+pub fn h2_titles(content: &str, limit: usize) -> Vec<String> {
+    extract_h2_sections(content)
+        .into_iter()
+        .map(|(heading, _)| heading)
+        .take(limit)
+        .collect()
+}
+
 /// First `n` `##` sections, including the heading lines themselves.
 /// Empty when the note has no `##`.
 pub fn extract_first_h2_sections(content: &str, n: usize) -> String {
@@ -399,6 +408,24 @@ mod tests {
          - [ ] Lire une méditation stoïque\n\
          ## Nightly review\n\
          - [ ] Regarder l’agenda de demain\n"
+    }
+
+    #[test]
+    fn h2_titles_caps_at_seven() {
+        assert_eq!(
+            h2_titles(daily_template_note(), 7),
+            vec![
+                "Notes",
+                "Links / captured ideas",
+                "Tasks",
+                "Morning review",
+                "Nightly review"
+            ]
+        );
+        assert_eq!(h2_titles(daily_template_note(), 2), vec!["Notes", "Links / captured ideas"]);
+        let extra = "## A\n## B\n## C\n## D\n## E\n## F\n## G\n## H\n";
+        assert_eq!(h2_titles(extra, 7).len(), 7);
+        assert_eq!(h2_titles(extra, 7)[6], "G");
     }
 
     #[test]

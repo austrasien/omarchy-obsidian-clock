@@ -52,6 +52,10 @@ pub struct Snapshot {
     /// Every `##` section in the daily note (heading + body).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sections: Option<Vec<NoteSection>>,
+    /// First `##` titles from the daily-note template (at most 7), used as
+    /// popup tabs. Falls back to the day's own headings when no template.
+    #[serde(rename = "templateHeadings", skip_serializing_if = "Option::is_none")]
+    pub template_headings: Option<Vec<String>>,
     /// Absolute `obsidian://open?path=…` URI for the daily note path.
     #[serde(rename = "obsidianUri", skip_serializing_if = "Option::is_none")]
     pub obsidian_uri: Option<String>,
@@ -118,6 +122,7 @@ impl Snapshot {
             todos: None,
             notes: None,
             sections: None,
+            template_headings: None,
             obsidian_uri: None,
             carry_over_count: None,
             is_today: None,
@@ -141,6 +146,7 @@ impl Snapshot {
             todos: Some(todos),
             notes: None,
             sections: None,
+            template_headings: None,
             obsidian_uri: None,
             carry_over_count: None,
             is_today: None,

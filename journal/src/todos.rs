@@ -9,8 +9,8 @@ use regex::Regex;
 
 use crate::config::{DailyNotesConfig, Vault, VaultError};
 use crate::notes::{
-    extract_first_h2_sections, extract_h2_sections, extract_section, replace_first_h2_sections,
-    replace_or_append_section,
+    extract_first_h2_sections, extract_h2_sections, extract_section, h2_titles,
+    replace_first_h2_sections, replace_or_append_section,
 };
 use crate::open;
 use crate::status::{NoteSection, Snapshot, TodoItem};
@@ -278,6 +278,24 @@ fn enrich_snapshot(
         let has_template = vault.template_path(config).is_some_and(|p| p.exists());
         snap.created_from_template = Some(has_template && path.exists());
     }
+    let from_template = vault
+        .template_path(config)
+        .and_then(|p| fs::read_to_string(p).ok())
+        .map(|body| h2_titles(&body, 16));
+    let from_day = snap
+        .sections
+        .as_ref()
+        .map(|secs| {
+            secs.iter()
+                .map(|s| s.heading.clone())
+                .take(16)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    snap.template_headings = Some(match from_template {
+        Some(heads) if !heads.is_empty() => heads,
+        _ => from_day,
+    });
     Ok(())
 }
 

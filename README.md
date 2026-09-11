@@ -34,39 +34,35 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 | :--- | :--- | :--- |
 | **See the month** | Yes | Yes |
 | **Open that day’s journal** | No | Click the day |
-| **Todos** | — | Dots under the date for **open** tasks (max 5); checked items only in the popup |
-| **Journal text** | — | One tab per `##` section (Notes, Links, Tasks, morning/nightly review) |
+| **Todos** | — | Always-visible checklist + **Add a todo**; dots under the date for **open** items (max 5) |
+| **Journal text** | — | One button per `##` in your daily template (up to 6), editor below |
 | **Omarchy** | Built-in | User plugin; disable `omarchy.clock` |
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
+
+## What’s new in 1.4
+
+Tabs are no longer a hardcoded Notes / Links / Tasks / reviews row. The popup follows the `##` headings in your Daily Notes **template** (or that day’s note if the template is missing).
+
+- A heading whose title contains **`tasks`** (case-insensitive) is **pinned**: the checkbox list and **Add a todo…** stay on screen, above the editor. It is not a tab.
+- Up to **six** other `##` headings become **equal-width buttons under the text field**. Fewer headings → fewer buttons.
+- Morning / nightly icons: title contains `nigh` → moon; `morning`, `daily`, or the word `day` → sun. Other titles show the heading text.
+- Selecting a section shows that heading’s checkboxes (if any), then the rest of the body in the editor. **Add a todo** always writes under the Tasks heading.
+- Each button still reads and writes **that `##` only**. Compact markdown: no extra blank line after a `##` or before the next one.
+- `--text` values that start with `-` keep working (review lines like `- [x]`).
 
 ## What’s new in 1.3.1
 
 Toggling a **morning / nightly** leading checkbox now writes `- [x]` into the daily note. v1.3 dropped those saves: the body starts with `- [ ]`, and the CLI treated that as a flag, so Obsidian never saw the check and the box came back empty on reopen.
 
-## What’s new in 1.3
-
-v1.2 only changed calendar dots (open todos). **1.3** is the per-section daily note:
-
-- **Five tabs** under the month grid: Notes · Links · Tasks · morning (sun) · nightly (moon). Default tab is Notes. No date title in that block; **↗** on the right opens the note in Obsidian.
-- The widget matches **`##` titles**, not heading order. Each tab reads and writes **that section only**. Other `##` blocks are left untouched.
-- **Calendar:** in-month days turn white when Notes or Links have prose. Dots are **open Tasks only** (max 5). Review checkboxes never become dots.
-- **Autosave** after a short pause. The caret stays where you type; Enter starts a new line instead of jumping to the start of the field.
-- **Compact markdown:** no blank line after a `##`, none before the next `##`. A newline in the editor is a newline in the file.
-
 ## Daily note headings
 
-Put these `##` titles in the daily note. The popup matches **by title** (not by order). Anything else under a different `##` is left alone.
+The popup does **not** assume a fixed set of titles. It lists `##` headings from the vault’s daily-note template. Matching is **by title** (case-insensitive). Anything under a heading the popup is not showing is left alone.
 
-| `##` title | Also recognized | Checkboxes | Calendar |
+| Kind | How it is recognized | In the popup | Calendar |
 | :--- | :--- | :--- | :--- |
-| **Notes** | exactly `Notes` | Not todos. The Notes tab is a text editor; a `- [ ]` line there is just markdown. | No dots. Non-empty prose here (or under Links) turns that in-month day **white**. |
-| **Links / captured ideas** | title contains `link`, `captured`, or `idée` / `idee` | Same as Notes (Links tab). | Same as Notes. |
-| **Tasks** | `Todos`, `Tâches` | **The todo list.** Toggle in the Tasks tab; **Add a todo** only exists here. | One dot per **open** `- [ ]` (max 5). Done items stay in the list, not on the grid. |
-| **Morning review** | title contains `morning` or `matinal` | Only the **leading** run of `- [ ]` / `- [x]` under the heading is interactive (same look as Tasks). No add field. | Not dots. Not white-day prose. |
-| **Nightly review** | title contains `night`, `nightly`, or `nocturne` | Same as Morning review. | Not dots. Not white-day prose. |
-
-Leading review checkboxes means: from the first non-empty line, consecutive checkbox lines only. The first line that is not a checkbox (a prompt, a `###`, a paragraph) starts the text editor for that tab.
+| **Tasks** | `##` title contains `tasks` | Pinned list + **Add a todo…** (not a button) | One dot per **open** `- [ ]` in the note (max 5). Done items stay in the list. |
+| **Other `##`** | Every other template heading, up to 6 | Button under the editor. Checkboxes in that section are toggles; the rest is the text field. | Non-checkbox prose on an in-month day turns that cell **white**. |
 
 Writes replace that one section only. No extra blank line after the `##` or before the next `##`; a newline in the editor is a newline in the file.
 
@@ -75,20 +71,18 @@ Writes replace that one section only. No extra blank line after the `##` or befo
 ### 📅 Month grid
 - ISO week numbers; click **W** to change week start.
 - Click the big date heading to jump back to today.
-- In-month days with Notes/Links prose render in white; other month days stay muted. Adjacent-month cells stay grey even if those files have notes.
-- Up to five dots under a day, one per open Tasks item.
+- In-month days with journal prose (not only checkboxes) render in white; other month days stay muted. Adjacent-month cells stay grey even if those files have notes.
+- Up to five dots under a day, one per open todo.
 
 ### ✅ Popup
-- Tab row: **Notes** · **Links** · **Tasks** · sun (morning review) · moon (nightly review). Default: Notes.
-- Notes / Links: text editor for that section’s body.
-- Tasks: checkbox list + **Add a todo…** (only on this tab). Nested items keep their indent.
-- Morning / nightly: leading checkboxes as a list (toggle, no add field); the rest of the section (prompts, `###`, prose) in the editor below. Toggles are written to the note like Tasks.
+- Pinned **Tasks** list + **Add a todo…**, then the text editor, then up to six section buttons (equal width) and **↗** (open in Obsidian).
+- Section buttons come from the daily template. Sun / moon glyphs when the title looks like a morning or nightly heading.
 - Autosave after a short pause. A **Saving…** hint appears while dirty. The caret is not reset on save, so Enter keeps a second line.
 - ↗ opens the selected day in Obsidian (creates the note from the vault’s Daily Notes template if it is missing).
 
 ### 🔌 Backend (bundled)
 - Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed copy) for `status`, `month`, `set-notes`, `add`, `toggle`, `open`.
-- `status` returns every `##` as `{heading, body}`. `set-notes --notes-heading <title>` replaces that body only.
+- `status` returns every `##` as `{heading, body}` plus `templateHeadings` from the daily template. `set-notes --notes-heading <title>` replaces that body only.
 - Rust sources live under `journal/` (Apache-2.0 fork of [obsidian-daily-qs](https://github.com/LucaNerlich/obsidian-daily-qs) with whole-note journal mode).
 - Optional override: `journalBin`. No separate `austraz.obsidian-daily` / marketplace daily plugin required.
 
