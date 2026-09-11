@@ -10,7 +10,8 @@ use obsidian_daily_qs::config::Vault;
 use obsidian_daily_qs::status::{Snapshot, WeekSummary};
 use obsidian_daily_qs::watch;
 use obsidian_daily_qs::{
-    SnapshotFilter, add_todo_under, carry_over, delete_todo, edit_todo, month_summary_with,
+    SnapshotFilter, add_todo_under, carry_over, defer_todo, delete_todo, edit_todo,
+    month_summary_with,
     open_in_obsidian, read_snapshot_with, set_indent, set_notes_with, toggle_todo, undo_last,
     week_summary_with,
 };
@@ -133,6 +134,13 @@ enum Command {
     },
     /// Move yesterday's still-open todos into the target day
     CarryOver {
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// Move one open todo from `date` to the next day (same heading)
+    Defer {
+        #[arg(long, allow_hyphen_values = true)]
+        text: String,
         #[arg(long)]
         date: Option<String>,
     },
@@ -261,7 +269,7 @@ fn main() {
         Command::Week { date } => {
             let out = match Vault::resolve(vault_arg, archive_arg) {
                 Ok(vault) => match parse_date(date) {
-                    Ok(d) => match week_summary_with(&vault, d, filter) {
+                    Ok(d) => match week_summary_with(&vault, d, calendar_filter(filter)) {
                         Ok(w) => w,
                         Err(err) => WeekSummary::error(err.to_string(), err.error_code()),
                     },
@@ -274,7 +282,7 @@ fn main() {
         Command::Month { date } => {
             let out = match Vault::resolve(vault_arg, archive_arg) {
                 Ok(vault) => match parse_date(date) {
-                    Ok(d) => match month_summary_with(&vault, d, filter) {
+                    Ok(d) => match month_summary_with(&vault, d, calendar_filter(filter)) {
                         Ok(w) => w,
                         Err(err) => WeekSummary::error(err.to_string(), err.error_code()),
                     },
@@ -291,6 +299,13 @@ fn main() {
             filter,
             carry_over,
         )),
+        Command::Defer { text, date } => emit(then_snapshot(
+            vault_arg,
+            archive_arg,
+            date,
+            filter,
+            |vault, d| defer_todo(vault, d, notes_heading.as_deref(), &text),
+        )),
         Command::Open { date } => emit(then_snapshot(
             vault_arg,
             archive_arg,
@@ -304,6 +319,21 @@ fn main() {
             |vault, d| set_notes_with(vault, d, filter, &text),
             date,
         )),
+    }
+}
+
+fn calendar_filter(filter: SnapshotFilter<'_>) -> SnapshotFilter<'_> {
+    if filter
+        .todo_heading
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty())
+    {
+        filter
+    } else {
+        SnapshotFilter {
+            todo_heading: Some("tasks"),
+            ..filter
+        }
     }
 }
 

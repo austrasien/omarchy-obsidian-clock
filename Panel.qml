@@ -70,7 +70,7 @@ Panel {
       out.push({
         key: heading,
         label: glyph !== "" ? glyph : heading,
-        tooltip: heading,
+        tooltip: "Edit " + heading,
         iconOnly: glyph !== ""
       })
     }
@@ -89,6 +89,11 @@ Panel {
   property string journalUri: ""
   property var todos: []
   property string pendingAdd: ""
+  property var pendingDefer: null
+  property var pendingEdit: null
+  property string editingHeading: ""
+  property int editingIndex: -1
+  property bool pendingMonthRefresh: false
   property string pendingStatusDate: ""
   property var monthMarks: ({})
   property bool pendingMonthMarks: false
@@ -207,6 +212,7 @@ Panel {
     if (next !== root.selectedKey) {
       root.tasksDoneExpanded = false
       root.sectionDoneExpanded = false
+      root.cancelTodoEdit()
     }
     root.selectedKey = next
     // A new day owns the editor; don't let yesterday's dirty flag
@@ -248,7 +254,7 @@ Panel {
   }
 
   function monthJournalCommand(args) {
-    return root.journalPrefix().concat(args)
+    return root.journalPrefix().concat(["--heading", "tasks"]).concat(args)
   }
 
   function lineIsMarkdownHeading(line) {
@@ -642,11 +648,46 @@ Panel {
     return Math.min(5, Math.floor(n))
   }
 
+  function todoDotColor(cell) {
+    if (cell && cell.key && cell.key < root.todayKey)
+      return Color.accent
+    if (cell && cell.inMonth)
+      return Style.selectedStateColor(root.contentForeground, Color.accent)
+    return Qt.darker(root.contentForeground, 1.9)
+  }
+
   function dayHasNote(cell, marks) {
     if (!cell || !cell.key || !cell.inMonth) return false
     var table = marks || root.monthMarks
     var mark = table ? table[cell.key] : null
     return !!(mark && mark.hasNotes)
+  }
+
+  function dayCellTooltip(cell) {
+    if (!cell || !cell.key) return ""
+    var label = cell.today
+      ? "Today"
+      : Qt.formatDate(new Date(cell.year, cell.month, cell.day), "ddd d MMM")
+    var n = 0
+    var mark = root.monthMarks ? root.monthMarks[cell.key] : null
+    if (mark) n = Number(mark.openCount) || 0
+    var extra = []
+    if (n > 0) {
+      extra.push((cell.key < root.todayKey ? "overdue · " : "")
+        + (n === 1 ? "1 open task" : n + " open tasks"))
+    }
+    if (root.dayHasNote(cell)) extra.push("has notes")
+    return extra.length ? label + " · " + extra.join(" · ") : label
+  }
+
+  function todoRowTooltip() {
+    return "Click to toggle · Right-click to edit"
+  }
+
+  function doneListTooltip(expanded, count) {
+    var n = Number(count) || 0
+    if (expanded) return "Hide completed"
+    return n === 1 ? "Show 1 completed" : "Show " + n + " completed"
   }
 
   function saveJournalNow() {
@@ -682,6 +723,7 @@ Panel {
     if (parsed.date && String(parsed.date) !== root.selectedKey) return
     if (String(parsed.state || "") === "error") {
       root.journalError = String(parsed.error || "Unable to read journal")
+      root.pendingMonthRefresh = false
       return
     }
     root.journalError = ""
@@ -716,6 +758,10 @@ Panel {
     if (dateKey !== "") {
       var counts = root.tasksOpenDoneCounts()
       root.patchMonthMark(dateKey, counts.open, counts.done, root.anySectionHasNotes())
+    }
+    if (root.pendingMonthRefresh) {
+      root.pendingMonthRefresh = false
+      root.loadMonthMarks()
     }
   }
 
@@ -825,6 +871,92 @@ Panel {
       })
     }
     root.writeSection(heading, root.composeSectionBody(todos, split.rest))
+  }
+
+  function isEditingTodo(heading, index) {
+    return root.editingHeading !== "" && root.editingHeading === String(heading || "")
+      && root.editingIndex === Number(index)
+  }
+
+  function startTodoEdit(heading, index) {
+    var h = String(heading || "")
+    var n = Number(index)
+    if (h === "" || !isFinite(n) || n < 0) return
+    root.editingHeading = h
+    root.editingIndex = n
+  }
+
+  function cancelTodoEdit() {
+    root.editingHeading = ""
+    root.editingIndex = -1
+  }
+
+  function commitTodoEdit(text) {
+    var heading = root.editingHeading
+    var n = root.editingIndex
+    var trimmed = String(text || "").trim()
+    root.cancelTodoEdit()
+    if (heading === "" || !isFinite(n) || n < 0) return
+    if (trimmed === "") return
+    if (root.journalDirty) {
+      root.pendingEdit = { heading: heading, index: n, text: trimmed }
+      root.saveJournalNow()
+      return
+    }
+    root.submitTodoEdit(heading, n, trimmed)
+  }
+
+  function submitTodoEdit(heading, index, text) {
+    var h = String(heading || "")
+    var n = Number(index)
+    var trimmed = String(text || "").trim()
+    if (h === "" || trimmed === "" || !isFinite(n) || n < 0) return
+    var split = root.splitCheckboxes(root.draftForHeading(h))
+    if (n >= split.todos.length) return
+    if (String(split.todos[n].text || "") === trimmed) return
+    var rest = (h === root.journalTab && journalArea) ? journalArea.text : split.rest
+    var todos = []
+    for (var i = 0; i < split.todos.length; i++) {
+      var item = split.todos[i]
+      todos.push({
+        index: item.index,
+        checked: item.checked,
+        text: i === n ? trimmed : item.text,
+        indent: item.indent,
+        bullet: item.bullet
+      })
+    }
+    root.writeSection(h, root.composeSectionBody(todos, rest))
+  }
+
+  function deferTodo(heading, index) {
+    var n = Number(index)
+    if (!isFinite(n) || n < 0) return
+    var h = String(heading || "")
+    if (h === "") return
+    var split = root.splitCheckboxes(root.draftForHeading(h))
+    if (n >= split.todos.length) return
+    var item = split.todos[n]
+    if (!item || item.checked) return
+    if (root.journalDirty) {
+      root.pendingDefer = { heading: h, index: n }
+      root.saveJournalNow()
+      return
+    }
+    root.submitDefer(h, item.text)
+  }
+
+  function submitDefer(heading, text) {
+    var h = String(heading || "")
+    var trimmed = String(text || "").trim()
+    if (h === "" || trimmed === "") return
+    if (root.journalBin === "" || root.vaultPath === "" || root.selectedKey === "") return
+    root.pendingMonthRefresh = true
+    actionProc.command = root.journalPrefix().concat([
+      "--notes-heading", h,
+      "defer", "--date", root.selectedKey, root.journalTextFlag(trimmed)
+    ])
+    actionProc.running = true
   }
 
   function onJournalEdited(text) {
@@ -964,7 +1096,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.editingLife || journalArea.activeFocus || todoInput.activeFocus
+      blocked: root.editingLife || journalArea.activeFocus || todoInput.activeFocus || root.editingIndex >= 0
       onMoveRequested: function(dx, dy) {
         if (dx !== 0) root.moveMonth(dx)
         if (dy !== 0) root.moveYear(dy)
@@ -1052,7 +1184,7 @@ Panel {
 
               PanelToolTip {
                 visible: heroMouse.containsMouse
-                text: "Today's journal"
+                text: "Jump to today"
                 fontFamily: root.contentFontFamily
               }
             }
@@ -1075,6 +1207,20 @@ Panel {
               TapHandler {
                 enabled: !root.editingLife
                 onDoubleTapped: root.startEditingLife()
+              }
+
+              MouseArea {
+                id: yearMouse
+                anchors.fill: parent
+                enabled: !root.editingLife
+                hoverEnabled: true
+                acceptedButtons: Qt.NoButton
+
+                PanelToolTip {
+                  visible: yearMouse.containsMouse
+                  text: "Year progress · Double-tap to set a life span"
+                  fontFamily: root.contentFontFamily
+                }
               }
 
               Row {
@@ -1102,6 +1248,12 @@ Panel {
                   inputMethodHints: Qt.ImhDigitsOnly
 
                   Keys.onPressed: function(event) { root.handleLifeKey(event, expectancyField) }
+
+                  PanelToolTip {
+                    visible: bornField.hovered && !bornField.activeFocus
+                    text: "Birth year"
+                    fontFamily: root.contentFontFamily
+                  }
                 }
 
                 Text {
@@ -1125,6 +1277,12 @@ Panel {
                   inputMethodHints: Qt.ImhDigitsOnly
 
                   Keys.onPressed: function(event) { root.handleLifeKey(event, bornField) }
+
+                  PanelToolTip {
+                    visible: expectancyField.hovered && !expectancyField.activeFocus
+                    text: "Life expectancy"
+                    fontFamily: root.contentFontFamily
+                  }
                 }
               }
 
@@ -1245,7 +1403,7 @@ Panel {
 
                 PanelToolTip {
                   visible: lifeMouse.containsMouse
-                  text: "Memento Mori"
+                  text: "Life progress · Double-tap to clear"
                   fontFamily: root.contentFontFamily
                 }
               }
@@ -1329,19 +1487,36 @@ Panel {
                 Repeater {
                   model: root.weekdays
 
-                  Text {
-                    textFormat: Text.PlainText
+                  Item {
                     required property var modelData
                     width: root.cellWidth
                     height: Style.space(16)
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    text: root.weekdayLabel(modelData)
-                    color: Qt.darker(root.contentForeground, 1.5)
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.caption
-                    font.letterSpacing: 1
-                    font.bold: true
+
+                    Text {
+                      anchors.fill: parent
+                      textFormat: Text.PlainText
+                      horizontalAlignment: Text.AlignHCenter
+                      verticalAlignment: Text.AlignVCenter
+                      text: root.weekdayLabel(modelData)
+                      color: Qt.darker(root.contentForeground, 1.5)
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                      font.letterSpacing: 1
+                      font.bold: true
+                    }
+
+                    MouseArea {
+                      id: weekdayMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      acceptedButtons: Qt.NoButton
+                    }
+
+                    PanelToolTip {
+                      visible: weekdayMouse.containsMouse
+                      text: root.labelLocale.dayName(modelData, Locale.LongFormat)
+                      fontFamily: root.contentFontFamily
+                    }
                   }
                 }
               }
@@ -1360,16 +1535,33 @@ Panel {
                     required property var modelData
                     spacing: root.cellSpacing
 
-                    Text {
-                      textFormat: Text.PlainText
+                    Item {
                       width: root.weekColumnWidth
                       height: root.cellHeight
-                      horizontalAlignment: Text.AlignHCenter
-                      verticalAlignment: Text.AlignVCenter
-                      text: modelData.week
-                      color: Qt.darker(root.contentForeground, 1.9)
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.caption
+
+                      Text {
+                        anchors.fill: parent
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        text: modelData.week
+                        color: Qt.darker(root.contentForeground, 1.9)
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+
+                      MouseArea {
+                        id: weekNumMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                      }
+
+                      PanelToolTip {
+                        visible: weekNumMouse.containsMouse
+                        text: "ISO week " + modelData.week
+                        fontFamily: root.contentFontFamily
+                      }
                     }
 
                     Item {
@@ -1441,9 +1633,7 @@ Panel {
                                 width: root.todoDotSize
                                 height: root.todoDotSize
                                 radius: width / 2
-                                color: day && day.inMonth
-                                  ? Style.selectedStateColor(root.contentForeground, Color.accent)
-                                  : Qt.darker(root.contentForeground, 1.9)
+                                color: root.todoDotColor(day)
                               }
                             }
                           }
@@ -1458,6 +1648,12 @@ Panel {
                           onClicked: root.selectDay(day)
                           onEntered: root.hoveredKey = day && day.key ? day.key : ""
                           onExited: if (root.hoveredKey === (day && day.key ? day.key : "")) root.hoveredKey = ""
+
+                          PanelToolTip {
+                            visible: dayMouse.containsMouse && day
+                            text: root.dayCellTooltip(day)
+                            fontFamily: root.contentFontFamily
+                          }
                         }
                       }
                     }
@@ -1546,6 +1742,12 @@ Panel {
                 font.pixelSize: Style.font.body
                 onAccepted: root.addTodo()
                 Keys.onEscapePressed: root.close()
+
+                PanelToolTip {
+                  visible: todoInput.hovered && !todoInput.activeFocus
+                  text: "Add a todo (Enter)"
+                  fontFamily: root.contentFontFamily
+                }
               }
 
               Repeater {
@@ -1553,10 +1755,11 @@ Panel {
 
                 Rectangle {
                   required property var modelData
+                  readonly property bool editing: root.isEditingTodo(root.tasksHeading, modelData.index)
                   width: calendarColumn.width
-                  implicitHeight: pinnedTodoLabel.implicitHeight + Style.space(4)
+                  implicitHeight: (editing ? pinnedTodoEdit.implicitHeight : pinnedTodoLabel.implicitHeight) + Style.space(4)
                   radius: Style.cornerRadius
-                  color: pinnedTodoMouse.containsMouse
+                  color: pinnedTodoMouse.containsMouse || editing
                     ? Style.hoverFillFor(root.contentForeground, Color.accent)
                     : "transparent"
 
@@ -1564,13 +1767,28 @@ Panel {
                     id: pinnedTodoMouse
                     anchors.fill: parent
                     hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.togglePinnedTodo(modelData.index)
+                    onClicked: function(mouse) {
+                      if (mouse.button === Qt.RightButton) {
+                        root.startTodoEdit(root.tasksHeading, modelData.index)
+                        return
+                      }
+                      if (editing) return
+                      root.togglePinnedTodo(modelData.index)
+                    }
+
+                    PanelToolTip {
+                      visible: pinnedTodoMouse.containsMouse && !pinnedDeferMouse.containsMouse && !editing
+                      text: root.todoRowTooltip()
+                      fontFamily: root.contentFontFamily
+                    }
                   }
 
                   Row {
                     anchors.left: parent.left
                     anchors.right: parent.right
+                    anchors.rightMargin: Style.space(22)
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.space(8)
 
@@ -1601,6 +1819,7 @@ Panel {
 
                     Text {
                       id: pinnedTodoLabel
+                      visible: !editing
                       width: parent.width - Style.space(24)
                       text: modelData.text
                       textFormat: Text.PlainText
@@ -1611,6 +1830,68 @@ Panel {
                       font.pixelSize: Style.font.body
                       font.strikeout: modelData.checked === true
                       wrapMode: Text.WordWrap
+                    }
+
+                    TextField {
+                      id: pinnedTodoEdit
+                      visible: editing
+                      width: parent.width - Style.space(24)
+                      foreground: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      verticalPadding: Style.space(2)
+                      horizontalPadding: Style.space(6)
+                      onVisibleChanged: {
+                        if (!visible) return
+                        text = String(modelData.text || "")
+                        Qt.callLater(function() {
+                          pinnedTodoEdit.forceActiveFocus()
+                          pinnedTodoEdit.selectAll()
+                        })
+                      }
+                      onAccepted: root.commitTodoEdit(text)
+                      onEditingFinished: {
+                        if (root.isEditingTodo(root.tasksHeading, modelData.index))
+                          root.commitTodoEdit(text)
+                      }
+                      Keys.onEscapePressed: function(event) {
+                        root.cancelTodoEdit()
+                        event.accepted = true
+                      }
+                    }
+                  }
+
+                  Item {
+                    visible: !editing
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Style.space(22)
+                    height: parent.height
+                    z: 2
+
+                    Text {
+                      anchors.centerIn: parent
+                      text: "\u2192"
+                      textFormat: Text.PlainText
+                      color: pinnedDeferMouse.containsMouse
+                        ? root.contentForeground
+                        : Qt.darker(root.contentForeground, 1.5)
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                    }
+
+                    MouseArea {
+                      id: pinnedDeferMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.deferTodo(root.tasksHeading, modelData.index)
+                    }
+
+                    PanelToolTip {
+                      visible: pinnedDeferMouse.containsMouse
+                      text: "Move to tomorrow"
+                      fontFamily: root.contentFontFamily
                     }
                   }
                 }
@@ -1633,6 +1914,12 @@ Panel {
                   onClicked: root.tasksDoneExpanded = !root.tasksDoneExpanded
                 }
 
+                PanelToolTip {
+                  visible: tasksDoneMouse.containsMouse
+                  text: root.doneListTooltip(root.tasksDoneExpanded, root.visibleTasksDone.length)
+                  fontFamily: root.contentFontFamily
+                }
+
                 Text {
                   id: tasksDoneLabel
                   anchors.left: parent.left
@@ -1651,10 +1938,11 @@ Panel {
 
                 Rectangle {
                   required property var modelData
+                  readonly property bool editing: root.isEditingTodo(root.tasksHeading, modelData.index)
                   width: calendarColumn.width
-                  implicitHeight: pinnedDoneLabel.implicitHeight + Style.space(4)
+                  implicitHeight: (editing ? pinnedDoneEdit.implicitHeight : pinnedDoneLabel.implicitHeight) + Style.space(4)
                   radius: Style.cornerRadius
-                  color: pinnedDoneMouse.containsMouse
+                  color: pinnedDoneMouse.containsMouse || editing
                     ? Style.hoverFillFor(root.contentForeground, Color.accent)
                     : "transparent"
 
@@ -1662,8 +1950,22 @@ Panel {
                     id: pinnedDoneMouse
                     anchors.fill: parent
                     hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.togglePinnedTodo(modelData.index)
+                    onClicked: function(mouse) {
+                      if (mouse.button === Qt.RightButton) {
+                        root.startTodoEdit(root.tasksHeading, modelData.index)
+                        return
+                      }
+                      if (editing) return
+                      root.togglePinnedTodo(modelData.index)
+                    }
+
+                    PanelToolTip {
+                      visible: pinnedDoneMouse.containsMouse && !editing
+                      text: root.todoRowTooltip()
+                      fontFamily: root.contentFontFamily
+                    }
                   }
 
                   Row {
@@ -1696,6 +1998,7 @@ Panel {
 
                     Text {
                       id: pinnedDoneLabel
+                      visible: !editing
                       width: parent.width - Style.space(24)
                       text: modelData.text
                       textFormat: Text.PlainText
@@ -1704,6 +2007,34 @@ Panel {
                       font.pixelSize: Style.font.body
                       font.strikeout: true
                       wrapMode: Text.WordWrap
+                    }
+
+                    TextField {
+                      id: pinnedDoneEdit
+                      visible: editing
+                      width: parent.width - Style.space(24)
+                      foreground: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      verticalPadding: Style.space(2)
+                      horizontalPadding: Style.space(6)
+                      onVisibleChanged: {
+                        if (!visible) return
+                        text = String(modelData.text || "")
+                        Qt.callLater(function() {
+                          pinnedDoneEdit.forceActiveFocus()
+                          pinnedDoneEdit.selectAll()
+                        })
+                      }
+                      onAccepted: root.commitTodoEdit(text)
+                      onEditingFinished: {
+                        if (root.isEditingTodo(root.tasksHeading, modelData.index))
+                          root.commitTodoEdit(text)
+                      }
+                      Keys.onEscapePressed: function(event) {
+                        root.cancelTodoEdit()
+                        event.accepted = true
+                      }
                     }
                   }
                 }
@@ -1776,14 +2107,33 @@ Panel {
                 }
               }
 
-              Text {
+              Item {
                 visible: root.journalDirty
-                text: "Saving…"
-                textFormat: Text.PlainText
-                color: Qt.darker(root.contentForeground, 1.5)
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
+                implicitWidth: savingLabel.implicitWidth
+                implicitHeight: savingLabel.implicitHeight
                 Layout.alignment: Qt.AlignVCenter
+
+                Text {
+                  id: savingLabel
+                  text: "Saving…"
+                  textFormat: Text.PlainText
+                  color: Qt.darker(root.contentForeground, 1.5)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                MouseArea {
+                  id: savingMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  acceptedButtons: Qt.NoButton
+                }
+
+                PanelToolTip {
+                  visible: savingMouse.containsMouse
+                  text: "Writing to the daily note"
+                  fontFamily: root.contentFontFamily
+                }
               }
 
               Rectangle {
@@ -1821,7 +2171,7 @@ Panel {
 
                 PanelToolTip {
                   visible: openMouse.containsMouse
-                  text: "Open in Obsidian"
+                  text: "Open this day in Obsidian"
                   fontFamily: root.contentFontFamily
                 }
               }
@@ -1872,6 +2222,14 @@ Panel {
                     if (root.journalDirty) root.saveJournalNow()
                     root.close()
                   }
+
+                  PanelToolTip {
+                    visible: journalArea.hovered && !journalArea.activeFocus
+                    text: root.journalTab !== ""
+                      ? "Notes — " + root.journalTab
+                      : "Daily notes"
+                    fontFamily: root.contentFontFamily
+                  }
                 }
 
                 ScrollBar.vertical: ScrollBar {
@@ -1904,10 +2262,11 @@ Panel {
 
                 Rectangle {
                   required property var modelData
+                  readonly property bool editing: root.isEditingTodo(root.journalTab, modelData.index)
                   width: calendarColumn.width
-                  implicitHeight: todoLabel.implicitHeight + Style.space(4)
+                  implicitHeight: (editing ? todoEdit.implicitHeight : todoLabel.implicitHeight) + Style.space(4)
                   radius: Style.cornerRadius
-                  color: todoMouse.containsMouse
+                  color: todoMouse.containsMouse || editing
                     ? Style.hoverFillFor(root.contentForeground, Color.accent)
                     : "transparent"
 
@@ -1915,13 +2274,28 @@ Panel {
                     id: todoMouse
                     anchors.fill: parent
                     hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.toggleSectionTodo(modelData.index)
+                    onClicked: function(mouse) {
+                      if (mouse.button === Qt.RightButton) {
+                        root.startTodoEdit(root.journalTab, modelData.index)
+                        return
+                      }
+                      if (editing) return
+                      root.toggleSectionTodo(modelData.index)
+                    }
+
+                    PanelToolTip {
+                      visible: todoMouse.containsMouse && !sectionDeferMouse.containsMouse && !editing
+                      text: root.todoRowTooltip()
+                      fontFamily: root.contentFontFamily
+                    }
                   }
 
                   Row {
                     anchors.left: parent.left
                     anchors.right: parent.right
+                    anchors.rightMargin: Style.space(22)
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.space(8)
 
@@ -1952,6 +2326,7 @@ Panel {
 
                     Text {
                       id: todoLabel
+                      visible: !editing
                       width: parent.width - Style.space(24)
                       text: modelData.text
                       textFormat: Text.PlainText
@@ -1962,6 +2337,68 @@ Panel {
                       font.pixelSize: Style.font.body
                       font.strikeout: modelData.checked === true
                       wrapMode: Text.WordWrap
+                    }
+
+                    TextField {
+                      id: todoEdit
+                      visible: editing
+                      width: parent.width - Style.space(24)
+                      foreground: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      verticalPadding: Style.space(2)
+                      horizontalPadding: Style.space(6)
+                      onVisibleChanged: {
+                        if (!visible) return
+                        text = String(modelData.text || "")
+                        Qt.callLater(function() {
+                          todoEdit.forceActiveFocus()
+                          todoEdit.selectAll()
+                        })
+                      }
+                      onAccepted: root.commitTodoEdit(text)
+                      onEditingFinished: {
+                        if (root.isEditingTodo(root.journalTab, modelData.index))
+                          root.commitTodoEdit(text)
+                      }
+                      Keys.onEscapePressed: function(event) {
+                        root.cancelTodoEdit()
+                        event.accepted = true
+                      }
+                    }
+                  }
+
+                  Item {
+                    visible: !editing
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Style.space(22)
+                    height: parent.height
+                    z: 2
+
+                    Text {
+                      anchors.centerIn: parent
+                      text: "\u2192"
+                      textFormat: Text.PlainText
+                      color: sectionDeferMouse.containsMouse
+                        ? root.contentForeground
+                        : Qt.darker(root.contentForeground, 1.5)
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                    }
+
+                    MouseArea {
+                      id: sectionDeferMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.deferTodo(root.journalTab, modelData.index)
+                    }
+
+                    PanelToolTip {
+                      visible: sectionDeferMouse.containsMouse
+                      text: "Move to tomorrow"
+                      fontFamily: root.contentFontFamily
                     }
                   }
                 }
@@ -1984,6 +2421,12 @@ Panel {
                   onClicked: root.sectionDoneExpanded = !root.sectionDoneExpanded
                 }
 
+                PanelToolTip {
+                  visible: sectionDoneMouse.containsMouse
+                  text: root.doneListTooltip(root.sectionDoneExpanded, root.visibleSectionDone.length)
+                  fontFamily: root.contentFontFamily
+                }
+
                 Text {
                   id: sectionDoneLabel
                   anchors.left: parent.left
@@ -2002,10 +2445,11 @@ Panel {
 
                 Rectangle {
                   required property var modelData
+                  readonly property bool editing: root.isEditingTodo(root.journalTab, modelData.index)
                   width: calendarColumn.width
-                  implicitHeight: doneTodoLabel.implicitHeight + Style.space(4)
+                  implicitHeight: (editing ? doneTodoEdit.implicitHeight : doneTodoLabel.implicitHeight) + Style.space(4)
                   radius: Style.cornerRadius
-                  color: doneTodoMouse.containsMouse
+                  color: doneTodoMouse.containsMouse || editing
                     ? Style.hoverFillFor(root.contentForeground, Color.accent)
                     : "transparent"
 
@@ -2013,8 +2457,22 @@ Panel {
                     id: doneTodoMouse
                     anchors.fill: parent
                     hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.toggleSectionTodo(modelData.index)
+                    onClicked: function(mouse) {
+                      if (mouse.button === Qt.RightButton) {
+                        root.startTodoEdit(root.journalTab, modelData.index)
+                        return
+                      }
+                      if (editing) return
+                      root.toggleSectionTodo(modelData.index)
+                    }
+
+                    PanelToolTip {
+                      visible: doneTodoMouse.containsMouse && !editing
+                      text: root.todoRowTooltip()
+                      fontFamily: root.contentFontFamily
+                    }
                   }
 
                   Row {
@@ -2047,6 +2505,7 @@ Panel {
 
                     Text {
                       id: doneTodoLabel
+                      visible: !editing
                       width: parent.width - Style.space(24)
                       text: modelData.text
                       textFormat: Text.PlainText
@@ -2055,6 +2514,34 @@ Panel {
                       font.pixelSize: Style.font.body
                       font.strikeout: true
                       wrapMode: Text.WordWrap
+                    }
+
+                    TextField {
+                      id: doneTodoEdit
+                      visible: editing
+                      width: parent.width - Style.space(24)
+                      foreground: root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      verticalPadding: Style.space(2)
+                      horizontalPadding: Style.space(6)
+                      onVisibleChanged: {
+                        if (!visible) return
+                        text = String(modelData.text || "")
+                        Qt.callLater(function() {
+                          doneTodoEdit.forceActiveFocus()
+                          doneTodoEdit.selectAll()
+                        })
+                      }
+                      onAccepted: root.commitTodoEdit(text)
+                      onEditingFinished: {
+                        if (root.isEditingTodo(root.journalTab, modelData.index))
+                          root.commitTodoEdit(text)
+                      }
+                      Keys.onEscapePressed: function(event) {
+                        root.cancelTodoEdit()
+                        event.accepted = true
+                      }
                     }
                   }
                 }
@@ -2133,10 +2620,23 @@ Panel {
       onStreamFinished: root.applyJournalLine(text)
     }
     onRunningChanged: {
-      if (!running && root.pendingAdd !== "") {
+      if (running) return
+      if (root.pendingAdd !== "") {
         var text = root.pendingAdd
         root.pendingAdd = ""
         root.submitAdd(text)
+        return
+      }
+      if (root.pendingDefer) {
+        var job = root.pendingDefer
+        root.pendingDefer = null
+        root.deferTodo(job.heading, job.index)
+        return
+      }
+      if (root.pendingEdit) {
+        var edit = root.pendingEdit
+        root.pendingEdit = null
+        root.submitTodoEdit(edit.heading, edit.index, edit.text)
       }
     }
   }

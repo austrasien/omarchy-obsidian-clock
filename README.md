@@ -34,11 +34,21 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 | :--- | :--- | :--- |
 | **See the month** | Yes | Yes |
 | **Open that day’s journal** | No | Click the day |
-| **Todos** | — | Inbox at the top (**Add a todo… (Enter)**); dots under the date for **open Tasks** (max 5) |
+| **Todos** | — | Inbox at the top (**Add a todo… (Enter)**); **→** moves one item to tomorrow; right-click renames; dots = **open Tasks** (max 5) |
 | **Journal text** | — | One button per `##` in your daily template (up to 6), editor below |
 | **Omarchy** | Built-in | User plugin; disable `omarchy.clock` |
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
+
+## What’s new in 1.6
+
+Open todos can move to tomorrow without dumping the rest of today’s list onto that note.
+
+- Each **open** checkbox has a **→**. It removes that line from the selected day and appends `- [ ]` under the **same `##`** on the next calendar day. Creating tomorrow’s file does **not** copy the other open todos (Daily Notes templates would otherwise fill them in).
+- **Right-click** a todo (open or done, Tasks or a section) to rename it in place. Enter saves, Esc cancels. Left-click still toggles.
+- Calendar dots on days **before today** use the **theme accent**. Today and future days keep the selected-state color.
+- Every control has a short English tooltip (bar: format / timezone; days; todos; →; sections; ↗).
+- `month` / `week` on the bundled CLI count **Tasks** unless `--heading` is set, so a newly created tomorrow cannot mark the grid with template checkboxes from other sections.
 
 ## What’s new in 1.5
 
@@ -70,8 +80,8 @@ The popup does **not** assume a fixed set of titles. It lists `##` headings from
 
 | Kind | How it is recognized | In the popup | Calendar |
 | :--- | :--- | :--- | :--- |
-| **Tasks** | `##` title contains `tasks` | Pinned list + **Add a todo… (Enter)** (not a button). Done items hide behind **`N done`**. | One dot per **open** `- [ ]` under this heading (max 5). |
-| **Other `##`** | Every other template heading, up to 6 | Button above the editor. Checkboxes in that section sit under the text field (done items also collapse). | Non-checkbox prose on an in-month day turns that cell **white**. |
+| **Tasks** | `##` title contains `tasks` | Pinned list + **Add a todo… (Enter)** (not a button). Done items hide behind **`N done`**. **→** on an open row defers that item to tomorrow under this heading. Right-click renames. | One dot per **open** `- [ ]` under this heading (max 5). Days **before today** use the theme **accent**. |
+| **Other `##`** | Every other template heading, up to 6 | Button above the editor. Checkboxes in that section sit under the text field (done items also collapse). Same **→** / right-click as Tasks. | Non-checkbox prose on an in-month day turns that cell **white**. |
 
 Writes replace that one section only. No extra blank line after the `##` or before the next `##`; a newline in the editor is a newline in the file.
 
@@ -81,16 +91,19 @@ Writes replace that one section only. No extra blank line after the `##` or befo
 - ISO week numbers; click **W** to change week start.
 - Click the big date heading to jump back to today.
 - In-month days with journal prose (not only checkboxes) render in white; other month days stay muted. Adjacent-month cells stay grey even if those files have notes.
-- Up to five dots under a day, one per **open Tasks** todo.
+- Up to five dots under a day, one per **open Tasks** todo. Past days with leftovers use the **theme accent**; today and future use the selected-state color.
 
 ### ✅ Popup
 - **Add a todo… (Enter)** at the top (focused on open), then open Tasks, then **`N done`**, then up to six section buttons (equal width) and **↗** (open in Obsidian), then the editor, then that section’s checkboxes.
+- Left-click a todo to toggle. **Right-click** to rename (Enter / Esc). **→** on an open row moves that item to tomorrow under the same heading.
 - Section buttons come from the daily template. Sun / moon glyphs when the title looks like a morning or nightly heading.
+- Hover any control for a short English tooltip.
 - Autosave after a short pause. A **Saving…** hint appears while dirty. The caret is not reset on save, so Enter keeps a second line.
 - ↗ opens the selected day in Obsidian (creates the note from the vault’s Daily Notes template if it is missing).
 
 ### 🔌 Backend (bundled)
-- Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed copy) for `status`, `month`, `set-notes`, `add`, `toggle`, `open`.
+- Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed copy) for `status`, `month`, `week`, `set-notes`, `add`, `toggle`, `defer`, `open`.
+- `defer --text=… --date YYYY-MM-DD` (with `--notes-heading`) moves one open checkbox to the next day. `month` / `week` default `--heading` to `tasks`.
 - `status` returns every `##` as `{heading, body}` plus `templateHeadings` from the daily template. `set-notes --notes-heading <title>` replaces that body only.
 - Rust sources live under `journal/` (Apache-2.0 fork of [obsidian-daily-qs](https://github.com/LucaNerlich/obsidian-daily-qs) with whole-note journal mode).
 - Optional override: `journalBin`. No separate `austraz.obsidian-daily` / marketplace daily plugin required.

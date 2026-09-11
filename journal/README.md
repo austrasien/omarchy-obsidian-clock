@@ -1,7 +1,12 @@
 # Journal backend (`obsidian-daily-qs`)
 
-Rust CLI used by `austraz.clock` for Obsidian daily notes (status / month /
-set-notes / add / toggle / open).
+Rust CLI used by `austraz.clock` for Obsidian daily notes (`status`, `month`,
+`week`, `set-notes`, `add`, `toggle`, `defer`, `open`).
+
+`month` / `week` count checkboxes under a `##` whose title contains `tasks`
+unless `--heading` is set. `defer --text=…` moves one open item to the next
+day under `--notes-heading` (default `Tasks`) without rolling over the rest
+of today’s list.
 
 Forked from [LucaNerlich/obsidian-daily-qs](https://github.com/LucaNerlich/obsidian-daily-qs)
 (Apache-2.0) with `set-notes` and empty-heading = whole-note journal mode.

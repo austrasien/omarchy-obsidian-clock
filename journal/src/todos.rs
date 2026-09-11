@@ -430,6 +430,123 @@ pub fn carry_over(vault: &Vault, date: NaiveDate) -> Result<Snapshot, VaultError
     read_snapshot(vault, date)
 }
 
+/// Move one still-open todo from `date` to the next calendar day, under the
+/// same `##` heading (default `Tasks`). Creating tomorrow's note does **not**
+/// roll over the rest of today's list.
+pub fn defer_todo(
+    vault: &Vault,
+    date: NaiveDate,
+    heading: Option<&str>,
+    text: &str,
+) -> Result<Snapshot, VaultError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(VaultError::Io("todo text is empty".into()));
+    }
+    if text.contains('\n') || text.contains('\r') {
+        return Err(VaultError::Io("todo text must be a single line".into()));
+    }
+    let heading = heading
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Tasks");
+    let tomorrow = date
+        .checked_add_days(chrono::Days::new(1))
+        .ok_or_else(|| VaultError::Io("date overflow".into()))?;
+
+    let config = vault.daily_notes_config()?;
+    let today_path = resolved_note_path(vault, &config, date)?;
+    if !today_path.exists() {
+        return Err(VaultError::Io(format!(
+            "daily note does not exist: {}",
+            today_path.display()
+        )));
+    }
+    let today_content = fs::read_to_string(&today_path)
+        .map_err(|e| VaultError::Io(format!("failed to read {}: {e}", today_path.display())))?;
+    let today_body = extract_section(&today_content, heading);
+    let Some(stripped) = take_open_todo_from_body(&today_body, text) else {
+        return Err(VaultError::Io(format!(
+            "open todo {text:?} not found under ## {heading}"
+        )));
+    };
+
+    let tomorrow_path = resolved_note_path(vault, &config, tomorrow)?;
+    create_note_if_missing(vault, &config, &tomorrow_path, tomorrow)?;
+    let tomorrow_content = fs::read_to_string(&tomorrow_path).map_err(|e| {
+        VaultError::Io(format!(
+            "failed to read {}: {e}",
+            tomorrow_path.display()
+        ))
+    })?;
+    let tomorrow_body = extract_section(&tomorrow_content, heading);
+    if !body_has_open_todo(&tomorrow_body, text) {
+        let tomorrow_next = replace_or_append_section(
+            &tomorrow_content,
+            heading,
+            &append_open_todo(&tomorrow_body, text),
+        );
+        write_atomic_with_undo(
+            vault,
+            tomorrow,
+            &tomorrow_path,
+            &tomorrow_content,
+            &tomorrow_next,
+        )?;
+    }
+
+    let today_next = replace_or_append_section(&today_content, heading, &stripped);
+    write_atomic_with_undo(vault, date, &today_path, &today_content, &today_next)?;
+    read_snapshot(vault, date)
+}
+
+fn take_open_todo_from_body(body: &str, text: &str) -> Option<String> {
+    let want = text.trim();
+    let re = checkbox_re();
+    let mut found = false;
+    let mut kept: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        if !found
+            && let Some(caps) = re.captures(line)
+            && caps[3].eq(" ")
+            && caps[5].trim() == want
+        {
+            found = true;
+            continue;
+        }
+        kept.push(line);
+    }
+    if !found {
+        return None;
+    }
+    while kept.first().is_some_and(|line| line.trim().is_empty()) {
+        kept.remove(0);
+    }
+    while kept.last().is_some_and(|line| line.trim().is_empty()) {
+        kept.pop();
+    }
+    Some(kept.join("\n"))
+}
+
+fn body_has_open_todo(body: &str, text: &str) -> bool {
+    let want = text.trim();
+    let re = checkbox_re();
+    body.lines().any(|line| {
+        re.captures(line)
+            .is_some_and(|caps| caps[3].eq(" ") && caps[5].trim() == want)
+    })
+}
+
+fn append_open_todo(body: &str, text: &str) -> String {
+    let line = format!("- [ ] {text}");
+    let trimmed = body.trim_end();
+    if trimmed.is_empty() {
+        line
+    } else {
+        format!("{trimmed}\n{line}")
+    }
+}
+
 /// Open the daily note in Obsidian via `xdg-open`.
 pub fn open_in_obsidian(vault: &Vault, date: NaiveDate) -> Result<Snapshot, VaultError> {
     let snap = prepare_note_for_open(vault, date)?;
@@ -1597,6 +1714,73 @@ mod tests {
             "- [x] done yesterday\n"
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn defer_todo_moves_open_task_to_next_day() {
+        let content = "## Notes\nhello\n## Tasks\n- [ ] ship\n- [ ] stay\n- [x] done\n";
+        let (vault, date, today) = vault_with(content);
+        defer_todo(&vault, date, Some("Tasks"), "ship").unwrap();
+        let today_body = fs::read_to_string(&today).unwrap();
+        assert!(
+            !today_body.contains("- [ ] ship"),
+            "today still has ship: {today_body}"
+        );
+        assert!(today_body.contains("- [ ] stay"));
+        assert!(today_body.contains("- [x] done"));
+        let tomorrow = vault.root().join("Daily/2026-08-21.md");
+        let tomorrow_body = fs::read_to_string(&tomorrow).unwrap();
+        assert!(tomorrow_body.contains("## Tasks"));
+        assert!(tomorrow_body.contains("- [ ] ship"));
+        assert!(!tomorrow_body.contains("- [ ] stay"));
+        let _ = fs::remove_dir_all(vault.root());
+    }
+
+    #[test]
+    fn defer_todo_does_not_roll_other_open_todos() {
+        let content = "## Tasks\n- [ ] ship\n- [ ] other\n";
+        let (vault, date, today) = vault_with(content);
+        defer_todo(&vault, date, Some("Tasks"), "ship").unwrap();
+        assert!(fs::read_to_string(&today).unwrap().contains("- [ ] other"));
+        let tomorrow_body = fs::read_to_string(vault.root().join("Daily/2026-08-21.md")).unwrap();
+        assert!(tomorrow_body.contains("- [ ] ship"));
+        assert!(
+            !tomorrow_body.contains("- [ ] other"),
+            "rolled other todos: {tomorrow_body}"
+        );
+        let _ = fs::remove_dir_all(vault.root());
+    }
+
+    #[test]
+    fn defer_todo_keeps_review_heading() {
+        let content = "## Tasks\n- [ ] ship\n## Morning review\n- [ ] meditate\n";
+        let (vault, date, today) = vault_with(content);
+        defer_todo(&vault, date, Some("Morning review"), "meditate").unwrap();
+        let today_body = fs::read_to_string(&today).unwrap();
+        assert!(today_body.contains("- [ ] ship"));
+        assert!(!today_body.contains("- [ ] meditate"));
+        let tomorrow_body = fs::read_to_string(vault.root().join("Daily/2026-08-21.md")).unwrap();
+        assert!(tomorrow_body.contains("## Morning review"));
+        assert!(tomorrow_body.contains("- [ ] meditate"));
+        assert!(!tomorrow_body.contains("- [ ] ship"));
+        let _ = fs::remove_dir_all(vault.root());
+    }
+
+    #[test]
+    fn defer_todo_does_not_duplicate_existing_tomorrow_item() {
+        let (vault, date, today) = vault_with("## Tasks\n- [ ] ship\n");
+        let tomorrow = vault.root().join("Daily/2026-08-21.md");
+        fs::write(&tomorrow, "## Tasks\n- [ ] ship\n").unwrap();
+        defer_todo(&vault, date, Some("Tasks"), "ship").unwrap();
+        assert!(!fs::read_to_string(&today).unwrap().contains("- [ ] ship"));
+        assert_eq!(
+            fs::read_to_string(&tomorrow)
+                .unwrap()
+                .matches("- [ ] ship")
+                .count(),
+            1
+        );
+        let _ = fs::remove_dir_all(vault.root());
     }
 
     #[test]

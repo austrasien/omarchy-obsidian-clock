@@ -124,7 +124,7 @@ BarWidget {
     id: panelLoader
     active: true
     // Query busts Quickshell's QML cache so Panel.qml edits actually load.
-    source: Qt.resolvedUrl("Panel.qml") + "?rev=1.5"
+    source: Qt.resolvedUrl("Panel.qml") + "?rev=1.10"
     visible: false
     onLoaded: {
       root.injectPanel()
@@ -177,6 +177,8 @@ BarWidget {
     fixedHeight: root.vertical ? root.verticalLines.length * Style.bar.iconSlot : -1
     horizontalMargin: 8.75
     verticalPadding: 8.75
+
+    tooltipText: "Open calendar · Right-click: format · Middle-click: timezone"
 
     onPressed: function(b) {
       if (b === Qt.RightButton) root.cycleFormat()
