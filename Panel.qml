@@ -233,6 +233,12 @@ Panel {
     return root.journalPrefix().concat(args)
   }
 
+  // Clap treats a following argv that starts with '-' as a flag unless the
+  // value is attached (`--text=- [x] …`). Review bodies always start that way.
+  function journalTextFlag(text) {
+    return "--text=" + String(text == null ? "" : text)
+  }
+
   function monthJournalCommand(args) {
     var cmd = root.journalPrefix()
     if (root.notesH2Count > 0) {
@@ -549,7 +555,7 @@ Panel {
     root.setSyncedForTab(root.journalTab, body)
     notesProc.command = root.journalPrefix().concat([
       "--notes-heading", heading,
-      "set-notes", "--date", root.selectedKey, "--text", body
+      "set-notes", "--date", root.selectedKey, root.journalTextFlag(body)
     ])
     notesProc.running = true
   }
@@ -627,7 +633,7 @@ Panel {
     var trimmed = String(text || "").trim()
     if (trimmed === "" || root.journalBin === "" || root.vaultPath === "" || root.selectedKey === "")
       return
-    actionProc.command = root.journalCommand(["add", "--date", root.selectedKey, "--text", trimmed])
+    actionProc.command = root.journalCommand(["add", "--date", root.selectedKey, root.journalTextFlag(trimmed)])
     actionProc.running = true
   }
 
@@ -671,7 +677,7 @@ Panel {
     if (root.journalBin === "" || root.vaultPath === "") return
     notesProc.command = root.journalPrefix().concat([
       "--notes-heading", root.headingForTab(tab),
-      "set-notes", "--date", root.selectedKey, "--text", next
+      "set-notes", "--date", root.selectedKey, root.journalTextFlag(next)
     ])
     notesProc.running = true
   }

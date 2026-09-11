@@ -40,6 +40,10 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
 
+## What’s new in 1.3.1
+
+Toggling a **morning / nightly** leading checkbox now writes `- [x]` into the daily note. v1.3 dropped those saves: the body starts with `- [ ]`, and the CLI treated that as a flag, so Obsidian never saw the check and the box came back empty on reopen.
+
 ## What’s new in 1.3
 
 v1.2 only changed calendar dots (open todos). **1.3** is the per-section daily note:
@@ -78,7 +82,7 @@ Writes replace that one section only. No extra blank line after the `##` or befo
 - Tab row: **Notes** · **Links** · **Tasks** · sun (morning review) · moon (nightly review). Default: Notes.
 - Notes / Links: text editor for that section’s body.
 - Tasks: checkbox list + **Add a todo…** (only on this tab). Nested items keep their indent.
-- Morning / nightly: leading checkboxes as a list (toggle, no add field); the rest of the section (prompts, `###`, prose) in the editor below.
+- Morning / nightly: leading checkboxes as a list (toggle, no add field); the rest of the section (prompts, `###`, prose) in the editor below. Toggles are written to the note like Tasks.
 - Autosave after a short pause. A **Saving…** hint appears while dirty. The caret is not reset on save, so Enter keeps a second line.
 - ↗ opens the selected day in Obsidian (creates the note from the vault’s Daily Notes template if it is missing).
 

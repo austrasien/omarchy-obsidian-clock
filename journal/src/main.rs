@@ -62,7 +62,7 @@ enum Command {
     Watch,
     /// Add an open checkbox todo
     Add {
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         text: String,
         #[arg(long)]
         date: Option<String>,
@@ -83,7 +83,7 @@ enum Command {
     Edit {
         #[arg(long)]
         line: usize,
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         text: String,
         #[arg(long)]
         expect_text: Option<String>,
@@ -143,7 +143,7 @@ enum Command {
     },
     /// Replace the free-form notes section body
     SetNotes {
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         text: String,
         #[arg(long)]
         date: Option<String>,
