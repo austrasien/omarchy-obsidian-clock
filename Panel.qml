@@ -56,6 +56,10 @@ Panel {
   property var sectionSynced: ({})
   property bool applyingJournal: false
   property string editorLoadedKey: ""
+  property bool tasksDoneExpanded: false
+  property bool sectionDoneExpanded: false
+  property bool pendingTodoFocus: false
+  property int todoFocusTries: 0
   readonly property var journalTabs: {
     var heads = root.tabHeadings || []
     var out = []
@@ -136,9 +140,13 @@ Panel {
 
   function open() {
     refresh()
+    root.pendingTodoFocus = true
+    root.todoFocusTries = 0
     root.controller.show()
+    todoFocusTimer.restart()
     Qt.callLater(function() {
       if (root.opened) setCenterHoverRevealSuppressed(true)
+      root.tryFocusTodoInput()
     })
   }
 
@@ -196,6 +204,10 @@ Panel {
     if (next === "") return
     if (root.journalDirty && next !== root.selectedKey)
       root.saveJournalNow()
+    if (next !== root.selectedKey) {
+      root.tasksDoneExpanded = false
+      root.sectionDoneExpanded = false
+    }
     root.selectedKey = next
     // A new day owns the editor; don't let yesterday's dirty flag
     // swallow the snapshot that is about to arrive.
@@ -348,16 +360,87 @@ Panel {
     return root.splitCheckboxes(root.draftForHeading(tab)).rest
   }
 
+  function sortedTodos(todos) {
+    var list = todos || []
+    var open = []
+    var done = []
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].checked) done.push(list[i])
+      else open.push(list[i])
+    }
+    return open.concat(done)
+  }
+
+  function todosUnchecked(todos) {
+    var list = todos || []
+    var out = []
+    for (var i = 0; i < list.length; i++) {
+      if (!(list[i] && list[i].checked)) out.push(list[i])
+    }
+    return out
+  }
+
+  function todosChecked(todos) {
+    var list = todos || []
+    var out = []
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].checked) out.push(list[i])
+    }
+    return out
+  }
+
   readonly property var visibleSectionTodos: {
     var _ = root.sectionDrafts
     if (root.isTasksHeading(root.journalTab)) return []
     return root.splitCheckboxes(root.draftForHeading(root.journalTab)).todos
   }
 
+  readonly property var visibleSectionOpen: root.todosUnchecked(root.visibleSectionTodos)
+  readonly property var visibleSectionDone: root.todosChecked(root.visibleSectionTodos)
+
   readonly property var visibleTasksTodos: {
     var _ = root.sectionDrafts
     if (root.tasksHeading === "") return []
     return root.splitCheckboxes(root.draftForHeading(root.tasksHeading)).todos
+  }
+
+  readonly property var visibleTasksOpen: root.todosUnchecked(root.visibleTasksTodos)
+  readonly property var visibleTasksDone: root.todosChecked(root.visibleTasksTodos)
+
+  function tasksOpenDoneCounts() {
+    var list = root.visibleTasksTodos || []
+    var open = 0
+    var done = 0
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].checked) done++
+      else open++
+    }
+    return { open: open, done: done }
+  }
+
+  function tryFocusTodoInput() {
+    if (!root.pendingTodoFocus || !root.opened) {
+      todoFocusTimer.stop()
+      return
+    }
+    root.todoFocusTries++
+    if (todoInput && todoInput.visible && root.tasksHeading !== "") {
+      todoInput.forceActiveFocus()
+      if (todoInput.activeFocus) {
+        root.pendingTodoFocus = false
+        todoFocusTimer.stop()
+        return
+      }
+    }
+    if ((root.tabHeadings && root.tabHeadings.length > 0 && root.tasksHeading === "")
+        || root.todoFocusTries > 20) {
+      root.pendingTodoFocus = false
+      todoFocusTimer.stop()
+    }
+  }
+
+  function doneToggleLabel(count, expanded) {
+    return (expanded ? "▾ " : "▸ ") + count + " done"
   }
 
   function firstNonTasksHeading(heads) {
@@ -452,12 +535,14 @@ Panel {
       root.journalSynced = root.syncedForHeading(root.journalTab)
     }
     root.setEditorFromTab(false)
+    Qt.callLater(function() { root.tryFocusTodoInput() })
   }
 
   function selectJournalTab(tab) {
     var next = String(tab || "")
     if (next === "" || next === root.journalTab) return
     if (root.journalDirty) root.saveJournalNow()
+    root.sectionDoneExpanded = false
     root.journalTab = next
     root.applyingJournal = true
     root.journalDraft = root.editorTextForTab(next)
@@ -629,11 +714,8 @@ Panel {
     root.applyingJournal = false
     var dateKey = parsed.date ? String(parsed.date) : root.selectedKey
     if (dateKey !== "") {
-      var open = Number(parsed.openCount)
-      var done = Number(parsed.doneCount)
-      if (!isFinite(open)) open = nextTodos.filter(function(t) { return !t.checked }).length
-      if (!isFinite(done)) done = nextTodos.filter(function(t) { return t.checked }).length
-      root.patchMonthMark(dateKey, open, done, root.anySectionHasNotes())
+      var counts = root.tasksOpenDoneCounts()
+      root.patchMonthMark(dateKey, counts.open, counts.done, root.anySectionHasNotes())
     }
   }
 
@@ -847,6 +929,13 @@ Panel {
   // English short day names, matching the rest of the interface.
   function weekdayLabel(weekday) {
     return String(labelLocale.dayName(weekday, Locale.ShortFormat)).toUpperCase()
+  }
+
+  Timer {
+    id: todoFocusTimer
+    interval: 50
+    repeat: true
+    onTriggered: root.tryFocusTodoInput()
   }
 
   SystemClock {
@@ -1445,16 +1534,27 @@ Panel {
 
             Column {
               width: parent.width
-              spacing: Style.space(6)
+              spacing: Style.space(4)
               visible: root.tasksHeading !== ""
 
+              TextField {
+                id: todoInput
+                width: parent.width
+                placeholderText: "Add a todo… (Enter)"
+                foreground: root.contentForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.body
+                onAccepted: root.addTodo()
+                Keys.onEscapePressed: root.close()
+              }
+
               Repeater {
-                model: root.visibleTasksTodos
+                model: root.visibleTasksOpen
 
                 Rectangle {
                   required property var modelData
                   width: calendarColumn.width
-                  implicitHeight: pinnedTodoLabel.implicitHeight + Style.space(10)
+                  implicitHeight: pinnedTodoLabel.implicitHeight + Style.space(4)
                   radius: Style.cornerRadius
                   color: pinnedTodoMouse.containsMouse
                     ? Style.hoverFillFor(root.contentForeground, Color.accent)
@@ -1516,35 +1616,96 @@ Panel {
                 }
               }
 
-              RowLayout {
+              Rectangle {
+                visible: root.visibleTasksDone.length > 0
                 width: parent.width
-                spacing: Style.space(8)
-                height: todoInput.implicitHeight
+                implicitHeight: tasksDoneLabel.implicitHeight + Style.space(4)
+                radius: Style.cornerRadius
+                color: tasksDoneMouse.containsMouse
+                  ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                  : "transparent"
 
-                TextField {
-                  id: todoInput
-                  Layout.fillWidth: true
-                  Layout.fillHeight: true
-                  placeholderText: "Add a todo…"
-                  foreground: root.contentForeground
-                  font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.body
-                  onAccepted: root.addTodo()
-                  Keys.onEscapePressed: root.close()
+                MouseArea {
+                  id: tasksDoneMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.tasksDoneExpanded = !root.tasksDoneExpanded
                 }
 
-                PanelActionButton {
-                  iconText: "+"
-                  tooltipText: "Add todo"
-                  bordered: true
-                  size: todoInput.implicitHeight
-                  Layout.preferredWidth: size
-                  Layout.preferredHeight: size
-                  Layout.alignment: Qt.AlignVCenter
-                  foreground: root.contentForeground
-                  fontFamily: root.contentFontFamily
-                  fontSize: Style.font.body
-                  onClicked: root.addTodo()
+                Text {
+                  id: tasksDoneLabel
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.doneToggleLabel(root.visibleTasksDone.length, root.tasksDoneExpanded)
+                  textFormat: Text.PlainText
+                  color: Qt.darker(root.contentForeground, 1.5)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.body
+                }
+              }
+
+              Repeater {
+                model: root.tasksDoneExpanded ? root.visibleTasksDone : []
+
+                Rectangle {
+                  required property var modelData
+                  width: calendarColumn.width
+                  implicitHeight: pinnedDoneLabel.implicitHeight + Style.space(4)
+                  radius: Style.cornerRadius
+                  color: pinnedDoneMouse.containsMouse
+                    ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                    : "transparent"
+
+                  MouseArea {
+                    id: pinnedDoneMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.togglePinnedTodo(modelData.index)
+                  }
+
+                  Row {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+
+                    BorderSurface {
+                      width: Style.space(16)
+                      height: Style.space(16)
+                      anchors.verticalCenter: parent.verticalCenter
+                      radius: Math.max(2, Style.cornerRadius * 0.45)
+                      color: Style.selectedFillFor(root.contentForeground, Color.accent)
+                      borderSpec: Border.controlSpec(
+                        "selected",
+                        root.contentForeground,
+                        Color.accent)
+
+                      Text {
+                        anchors.centerIn: parent
+                        text: "\u2713"
+                        textFormat: Text.PlainText
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                    }
+
+                    Text {
+                      id: pinnedDoneLabel
+                      width: parent.width - Style.space(24)
+                      text: modelData.text
+                      textFormat: Text.PlainText
+                      color: Qt.darker(root.contentForeground, 1.6)
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      font.strikeout: true
+                      wrapMode: Text.WordWrap
+                    }
+                  }
                 }
               }
             }
@@ -1560,79 +1721,111 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            Column {
+            RowLayout {
               width: parent.width
-              spacing: Style.space(6)
+              spacing: Style.space(4)
 
               Repeater {
-                model: root.visibleSectionTodos
+                model: root.journalTabs
 
                 Rectangle {
                   required property var modelData
-                  width: calendarColumn.width
-                  implicitHeight: todoLabel.implicitHeight + Style.space(10)
+                  readonly property bool selected: modelData && modelData.key === root.journalTab
+                  Layout.fillWidth: true
+                  Layout.fillHeight: true
+                  Layout.preferredWidth: 1
+                  Layout.minimumWidth: Style.space(28)
+                  Layout.preferredHeight: Style.space(28)
+                  Layout.alignment: Qt.AlignVCenter
                   radius: Style.cornerRadius
-                  color: todoMouse.containsMouse
+                  color: selected || tabMouse.containsMouse
                     ? Style.hoverFillFor(root.contentForeground, Color.accent)
                     : "transparent"
+                  border.width: Style.spacing.hairline
+                  border.color: Style.normalBorderFor(root.contentForeground, Color.accent)
+
+                  Text {
+                    id: tabLabel
+                    anchors.centerIn: parent
+                    width: parent.width - Style.space(8)
+                    text: modelData ? modelData.label : ""
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignHCenter
+                    color: selected
+                      ? root.contentForeground
+                      : Qt.darker(root.contentForeground, 1.45)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: selected
+                  }
 
                   MouseArea {
-                    id: todoMouse
+                    id: tabMouse
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.toggleSectionTodo(modelData.index)
+                    onClicked: root.selectJournalTab(modelData.key)
                   }
 
-                  Row {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: Style.space(8)
-
-                    BorderSurface {
-                      width: Style.space(16)
-                      height: Style.space(16)
-                      anchors.verticalCenter: parent.verticalCenter
-                      radius: Math.max(2, Style.cornerRadius * 0.45)
-                      color: modelData.checked
-                        ? Style.selectedFillFor(root.contentForeground, Color.accent)
-                        : "transparent"
-                      borderSpec: Border.controlSpec(
-                        modelData.checked ? "selected" : "normal",
-                        root.contentForeground,
-                        Color.accent)
-
-                      Text {
-                        anchors.centerIn: parent
-                        visible: modelData.checked === true
-                        text: "\u2713"
-                        textFormat: Text.PlainText
-                        color: root.contentForeground
-                        font.family: root.contentFontFamily
-                        font.pixelSize: Style.font.caption
-                        font.bold: true
-                      }
-                    }
-
-                    Text {
-                      id: todoLabel
-                      width: parent.width - Style.space(24)
-                      text: modelData.text
-                      textFormat: Text.PlainText
-                      color: modelData.checked
-                        ? Qt.darker(root.contentForeground, 1.6)
-                        : root.contentForeground
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.body
-                      font.strikeout: modelData.checked === true
-                      wrapMode: Text.WordWrap
-                    }
+                  PanelToolTip {
+                    visible: tabMouse.containsMouse && modelData && modelData.tooltip
+                    text: modelData ? modelData.tooltip : ""
+                    fontFamily: root.contentFontFamily
                   }
                 }
               }
-            }
 
+              Text {
+                visible: root.journalDirty
+                text: "Saving…"
+                textFormat: Text.PlainText
+                color: Qt.darker(root.contentForeground, 1.5)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+                Layout.alignment: Qt.AlignVCenter
+              }
+
+              Rectangle {
+                Layout.preferredWidth: Style.space(28)
+                Layout.preferredHeight: Style.space(28)
+                Layout.minimumWidth: Style.space(28)
+                Layout.maximumWidth: Style.space(28)
+                Layout.fillHeight: true
+                Layout.alignment: Qt.AlignVCenter
+                radius: Style.cornerRadius
+                color: openMouse.containsMouse
+                  ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                  : "transparent"
+                border.width: 0
+
+                Text {
+                  anchors.centerIn: parent
+                  anchors.verticalCenterOffset: Style.space(2)
+                  text: "\u2197"
+                  textFormat: Text.PlainText
+                  color: openMouse.containsMouse
+                    ? root.contentForeground
+                    : Qt.darker(root.contentForeground, 1.45)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                MouseArea {
+                  id: openMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.openSelectedInObsidian()
+                }
+
+                PanelToolTip {
+                  visible: openMouse.containsMouse
+                  text: "Open in Obsidian"
+                  fontFamily: root.contentFontFamily
+                }
+              }
+            }
             Item {
               id: journalFrame
               width: parent.width
@@ -1701,76 +1894,173 @@ Panel {
               }
             }
 
-            RowLayout {
+            Column {
               width: parent.width
               spacing: Style.space(4)
+              visible: root.visibleSectionTodos.length > 0
 
               Repeater {
-                model: root.journalTabs
+                model: root.visibleSectionOpen
 
                 Rectangle {
                   required property var modelData
-                  readonly property bool selected: modelData && modelData.key === root.journalTab
-                  Layout.fillWidth: true
-                  Layout.preferredWidth: 1
-                  Layout.minimumWidth: Style.space(28)
-                  Layout.preferredHeight: Style.space(28)
+                  width: calendarColumn.width
+                  implicitHeight: todoLabel.implicitHeight + Style.space(4)
                   radius: Style.cornerRadius
-                  color: selected || tabMouse.containsMouse
+                  color: todoMouse.containsMouse
                     ? Style.hoverFillFor(root.contentForeground, Color.accent)
                     : "transparent"
-                  border.width: selected ? Style.spacing.hairline : 0
-                  border.color: Style.normalBorderFor(root.contentForeground, Color.accent)
-
-                  Text {
-                    id: tabLabel
-                    anchors.centerIn: parent
-                    width: parent.width - Style.space(8)
-                    text: modelData ? modelData.label : ""
-                    textFormat: Text.PlainText
-                    elide: Text.ElideRight
-                    horizontalAlignment: Text.AlignHCenter
-                    color: selected
-                      ? root.contentForeground
-                      : Qt.darker(root.contentForeground, 1.45)
-                    font.family: root.contentFontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: selected
-                  }
 
                   MouseArea {
-                    id: tabMouse
+                    id: todoMouse
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.selectJournalTab(modelData.key)
+                    onClicked: root.toggleSectionTodo(modelData.index)
                   }
 
-                  PanelToolTip {
-                    visible: tabMouse.containsMouse && modelData && modelData.tooltip
-                    text: modelData ? modelData.tooltip : ""
-                    fontFamily: root.contentFontFamily
+                  Row {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+
+                    BorderSurface {
+                      width: Style.space(16)
+                      height: Style.space(16)
+                      anchors.verticalCenter: parent.verticalCenter
+                      radius: Math.max(2, Style.cornerRadius * 0.45)
+                      color: modelData.checked
+                        ? Style.selectedFillFor(root.contentForeground, Color.accent)
+                        : "transparent"
+                      borderSpec: Border.controlSpec(
+                        modelData.checked ? "selected" : "normal",
+                        root.contentForeground,
+                        Color.accent)
+
+                      Text {
+                        anchors.centerIn: parent
+                        visible: modelData.checked === true
+                        text: "\u2713"
+                        textFormat: Text.PlainText
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                    }
+
+                    Text {
+                      id: todoLabel
+                      width: parent.width - Style.space(24)
+                      text: modelData.text
+                      textFormat: Text.PlainText
+                      color: modelData.checked
+                        ? Qt.darker(root.contentForeground, 1.6)
+                        : root.contentForeground
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      font.strikeout: modelData.checked === true
+                      wrapMode: Text.WordWrap
+                    }
                   }
                 }
               }
 
-              Text {
-                visible: root.journalDirty
-                text: "Saving…"
-                textFormat: Text.PlainText
-                color: Qt.darker(root.contentForeground, 1.5)
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
+              Rectangle {
+                visible: root.visibleSectionDone.length > 0
+                width: parent.width
+                implicitHeight: sectionDoneLabel.implicitHeight + Style.space(4)
+                radius: Style.cornerRadius
+                color: sectionDoneMouse.containsMouse
+                  ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                  : "transparent"
+
+                MouseArea {
+                  id: sectionDoneMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.sectionDoneExpanded = !root.sectionDoneExpanded
+                }
+
+                Text {
+                  id: sectionDoneLabel
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.doneToggleLabel(root.visibleSectionDone.length, root.sectionDoneExpanded)
+                  textFormat: Text.PlainText
+                  color: Qt.darker(root.contentForeground, 1.5)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.body
+                }
               }
 
-              PanelActionButton {
-                iconText: "\u2197"
-                tooltipText: "Open in Obsidian"
-                foreground: root.contentForeground
-                fontFamily: root.contentFontFamily
-                onClicked: root.openSelectedInObsidian()
+              Repeater {
+                model: root.sectionDoneExpanded ? root.visibleSectionDone : []
+
+                Rectangle {
+                  required property var modelData
+                  width: calendarColumn.width
+                  implicitHeight: doneTodoLabel.implicitHeight + Style.space(4)
+                  radius: Style.cornerRadius
+                  color: doneTodoMouse.containsMouse
+                    ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                    : "transparent"
+
+                  MouseArea {
+                    id: doneTodoMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.toggleSectionTodo(modelData.index)
+                  }
+
+                  Row {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(8)
+
+                    BorderSurface {
+                      width: Style.space(16)
+                      height: Style.space(16)
+                      anchors.verticalCenter: parent.verticalCenter
+                      radius: Math.max(2, Style.cornerRadius * 0.45)
+                      color: Style.selectedFillFor(root.contentForeground, Color.accent)
+                      borderSpec: Border.controlSpec(
+                        "selected",
+                        root.contentForeground,
+                        Color.accent)
+
+                      Text {
+                        anchors.centerIn: parent
+                        text: "\u2713"
+                        textFormat: Text.PlainText
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                    }
+
+                    Text {
+                      id: doneTodoLabel
+                      width: parent.width - Style.space(24)
+                      text: modelData.text
+                      textFormat: Text.PlainText
+                      color: Qt.darker(root.contentForeground, 1.6)
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.body
+                      font.strikeout: true
+                      wrapMode: Text.WordWrap
+                    }
+                  }
+                }
               }
             }
+
           }
         }
       }

@@ -34,11 +34,20 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 | :--- | :--- | :--- |
 | **See the month** | Yes | Yes |
 | **Open that day’s journal** | No | Click the day |
-| **Todos** | — | Always-visible checklist + **Add a todo**; dots under the date for **open** items (max 5) |
+| **Todos** | — | Inbox at the top (**Add a todo… (Enter)**); dots under the date for **open Tasks** (max 5) |
 | **Journal text** | — | One button per `##` in your daily template (up to 6), editor below |
 | **Omarchy** | Built-in | User plugin; disable `omarchy.clock` |
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
+
+## What’s new in 1.5
+
+The popup is an inbox first, a journal second.
+
+- **Add a todo… (Enter)** sits at the top. There is no `+` button — Enter adds. Opening the calendar focuses that field, not the editor.
+- Open todos stay in the list. Done items collapse behind a **`N done`** row (click to expand). Same pattern for checkboxes under a selected section.
+- Calendar dots count **open `- [ ]` under `## Tasks` only**. Morning / nightly / other checkboxes no longer mark the month.
+- Section buttons sit **above** the editor; that section’s checkboxes sit **below** it. Todo rows are a little tighter.
 
 ## What’s new in 1.4
 
@@ -61,8 +70,8 @@ The popup does **not** assume a fixed set of titles. It lists `##` headings from
 
 | Kind | How it is recognized | In the popup | Calendar |
 | :--- | :--- | :--- | :--- |
-| **Tasks** | `##` title contains `tasks` | Pinned list + **Add a todo…** (not a button) | One dot per **open** `- [ ]` in the note (max 5). Done items stay in the list. |
-| **Other `##`** | Every other template heading, up to 6 | Button under the editor. Checkboxes in that section are toggles; the rest is the text field. | Non-checkbox prose on an in-month day turns that cell **white**. |
+| **Tasks** | `##` title contains `tasks` | Pinned list + **Add a todo… (Enter)** (not a button). Done items hide behind **`N done`**. | One dot per **open** `- [ ]` under this heading (max 5). |
+| **Other `##`** | Every other template heading, up to 6 | Button above the editor. Checkboxes in that section sit under the text field (done items also collapse). | Non-checkbox prose on an in-month day turns that cell **white**. |
 
 Writes replace that one section only. No extra blank line after the `##` or before the next `##`; a newline in the editor is a newline in the file.
 
@@ -72,10 +81,10 @@ Writes replace that one section only. No extra blank line after the `##` or befo
 - ISO week numbers; click **W** to change week start.
 - Click the big date heading to jump back to today.
 - In-month days with journal prose (not only checkboxes) render in white; other month days stay muted. Adjacent-month cells stay grey even if those files have notes.
-- Up to five dots under a day, one per open todo.
+- Up to five dots under a day, one per **open Tasks** todo.
 
 ### ✅ Popup
-- Pinned **Tasks** list + **Add a todo…**, then the text editor, then up to six section buttons (equal width) and **↗** (open in Obsidian).
+- **Add a todo… (Enter)** at the top (focused on open), then open Tasks, then **`N done`**, then up to six section buttons (equal width) and **↗** (open in Obsidian), then the editor, then that section’s checkboxes.
 - Section buttons come from the daily template. Sun / moon glyphs when the title looks like a morning or nightly heading.
 - Autosave after a short pause. A **Saving…** hint appears while dirty. The caret is not reset on save, so Enter keeps a second line.
 - ↗ opens the selected day in Obsidian (creates the note from the vault’s Daily Notes template if it is missing).

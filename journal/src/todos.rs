@@ -234,7 +234,7 @@ fn filter_todos_by_heading(
         if let Some(caps) = heading_re.captures(lines[i]) {
             let level = caps[1].len();
             let title = caps[2].trim().to_lowercase();
-            if title == want_l {
+            if title == want_l || title.contains(&want_l) {
                 // Content under heading starts at the next line (1-based: i+2).
                 let start = i + 2;
                 let mut j = i + 1;
@@ -792,7 +792,10 @@ pub fn week_summary(
     vault: &Vault,
     anchor: NaiveDate,
 ) -> Result<crate::status::WeekSummary, VaultError> {
-    week_summary_with(vault, anchor, SnapshotFilter::default())
+    week_summary_with(vault, anchor, SnapshotFilter {
+        todo_heading: Some("tasks"),
+        ..SnapshotFilter::default()
+    })
 }
 
 pub fn week_summary_with(
@@ -837,7 +840,14 @@ pub fn month_summary(
     vault: &Vault,
     anchor: NaiveDate,
 ) -> Result<crate::status::WeekSummary, VaultError> {
-    month_summary_with(vault, anchor, SnapshotFilter::default())
+    month_summary_with(
+        vault,
+        anchor,
+        SnapshotFilter {
+            todo_heading: Some("tasks"),
+            ..SnapshotFilter::default()
+        },
+    )
 }
 
 pub fn month_summary_with(
@@ -1802,8 +1812,8 @@ mod tests {
             .find(|d| d.date == "2026-08-19")
             .expect("wednesday in week");
         assert!(wed.exists);
-        assert_eq!(wed.open_count, 1);
-        assert_eq!(wed.done_count, 1);
+        assert_eq!(wed.open_count, 0);
+        assert_eq!(wed.done_count, 0);
         let _ = fs::remove_dir_all(vault.root());
     }
 
@@ -1819,8 +1829,8 @@ mod tests {
             .find(|d| d.date == "2026-08-20")
             .expect("anchor day in month");
         assert!(day.exists);
-        assert_eq!(day.open_count, 2);
-        assert_eq!(day.done_count, 1);
+        assert_eq!(day.open_count, 0);
+        assert_eq!(day.done_count, 0);
         assert!(!day.has_notes);
         let empty = days
             .iter()
@@ -1828,6 +1838,22 @@ mod tests {
             .expect("month start");
         assert!(!empty.exists);
         assert_eq!(empty.open_count, 0);
+        let _ = fs::remove_dir_all(vault.root());
+    }
+
+    #[test]
+    fn month_summary_dots_count_only_tasks_heading() {
+        let content = "## Notes\n- [ ] captured idea\n## Tasks\n- [ ] ship\n- [x] done\n## Morning review\n- [ ] meditate\n";
+        let (vault, date, _) = vault_with(content);
+        let month = month_summary(&vault, date).unwrap();
+        let day = month
+            .days
+            .unwrap()
+            .into_iter()
+            .find(|d| d.date == "2026-08-20")
+            .expect("anchor day in month");
+        assert_eq!(day.open_count, 1);
+        assert_eq!(day.done_count, 1);
         let _ = fs::remove_dir_all(vault.root());
     }
 
