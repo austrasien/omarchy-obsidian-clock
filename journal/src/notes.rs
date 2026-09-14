@@ -84,10 +84,38 @@ fn extract_whole_note_journal(content: &str) -> String {
 /// True when the journal body has at least one non-empty, non-heading line.
 /// Heading-only cartouches (`## Notes` with no prose) do not count.
 pub fn has_journal_body(notes: &str) -> bool {
+    has_journal_body_except(notes, &std::collections::HashSet::new())
+}
+
+/// Same as [`has_journal_body`], but lines that appear in the daily template
+/// (prompt questions, stock review checkboxes) do not count as user notes.
+pub fn has_journal_body_except(
+    notes: &str,
+    skip: &std::collections::HashSet<String>,
+) -> bool {
     let re = heading_re();
     notes.lines().any(|line| {
         let t = line.trim();
-        !t.is_empty() && !re.is_match(line)
+        !t.is_empty() && !re.is_match(line) && !skip.contains(t)
+    })
+}
+
+/// Trimmed non-empty lines of a daily-note template, used as boilerplate skip.
+pub fn boilerplate_lines(template: &str) -> std::collections::HashSet<String> {
+    template
+        .lines()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// True when every non-empty line of `content` already exists in `template`.
+pub fn is_virgin_template(content: &str, template: &str) -> bool {
+    let skip = boilerplate_lines(template);
+    content.lines().all(|line| {
+        let t = line.trim();
+        t.is_empty() || skip.contains(t)
     })
 }
 
@@ -352,6 +380,22 @@ mod tests {
             ""
         )));
         assert!(!has_journal_body("   \n\n"));
+    }
+
+    #[test]
+    fn template_prompts_are_not_user_notes() {
+        let template = "## Notes\n## Tasks\n## Morning review\nQuelle sera ma posture si cela arrive ?\n";
+        let skip = boilerplate_lines(template);
+        assert!(!has_journal_body_except(
+            "## Notes\n## Morning review\nQuelle sera ma posture si cela arrive ?",
+            &skip
+        ));
+        assert!(has_journal_body_except("a real thought", &skip));
+        assert!(is_virgin_template(template, template));
+        assert!(!is_virgin_template(
+            "## Notes\n- I wrote this\n## Tasks\n",
+            template
+        ));
     }
 
     #[test]

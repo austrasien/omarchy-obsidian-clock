@@ -4,6 +4,7 @@ pub mod config;
 pub mod format;
 pub mod notes;
 pub mod open;
+pub mod owned;
 pub mod status;
 pub mod todos;
 pub mod undo;

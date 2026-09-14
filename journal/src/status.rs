@@ -73,6 +73,9 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub created_from_template: Option<bool>,
+    /// True when the day has user journal prose, not Daily-template prompts.
+    #[serde(rename = "hasNotes", skip_serializing_if = "Option::is_none")]
+    pub has_notes: Option<bool>,
     /// Machine-stable error class for UI empty states (`missing_vault`, …).
     #[serde(rename = "errorCode", skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
@@ -90,7 +93,7 @@ pub struct DaySummary {
     pub exists: bool,
     #[serde(rename = "isToday")]
     pub is_today: bool,
-    /// True when the journal body has at least one non-checkbox line.
+    /// True when the journal body has user prose, ignoring Daily-template prompts.
     #[serde(rename = "hasNotes")]
     pub has_notes: bool,
 }
@@ -128,6 +131,7 @@ impl Snapshot {
             is_today: None,
             template_name: None,
             created_from_template: None,
+            has_notes: None,
             error_code: Some(code.into()),
             error: Some(message.into()),
         }
@@ -152,6 +156,7 @@ impl Snapshot {
             is_today: None,
             template_name: None,
             created_from_template: None,
+            has_notes: None,
             error_code: None,
             error: None,
         }

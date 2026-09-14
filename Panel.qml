@@ -592,6 +592,13 @@ Panel {
     return n < 10 ? "0" + n : String(n)
   }
 
+  function ensureObsidian() {
+    if (root.journalBin === "" || root.vaultPath === "") return
+    if (ensureProc.running) return
+    ensureProc.command = root.journalCommand(["ensure-obsidian"])
+    ensureProc.running = true
+  }
+
   function loadMonthMarks() {
     if (root.journalBin === "" || root.vaultPath === "") return
     if (monthProc.running) {
@@ -757,7 +764,10 @@ Panel {
     var dateKey = parsed.date ? String(parsed.date) : root.selectedKey
     if (dateKey !== "") {
       var counts = root.tasksOpenDoneCounts()
-      root.patchMonthMark(dateKey, counts.open, counts.done, root.anySectionHasNotes())
+      var hasNotes = parsed.hasNotes === undefined
+        ? root.anySectionHasNotes()
+        : parsed.hasNotes === true
+      root.patchMonthMark(dateKey, counts.open, counts.done, hasNotes)
     }
     if (root.pendingMonthRefresh) {
       root.pendingMonthRefresh = false
@@ -2575,6 +2585,7 @@ Panel {
         root.resolvedJournalBin = found
         if (root.selectedKey !== "") root.loadJournal()
         root.loadMonthMarks()
+        root.ensureObsidian()
       }
     }
     onExited: function(exitCode) {
@@ -2639,6 +2650,10 @@ Panel {
         root.submitTodoEdit(edit.heading, edit.index, edit.text)
       }
     }
+  }
+
+  Process {
+    id: ensureProc
   }
 
   Process {

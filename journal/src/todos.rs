@@ -150,6 +150,7 @@ pub fn read_snapshot_with(
     let (todos, notes, sections) = if path.exists() {
         let content = fs::read_to_string(&path)
             .map_err(|e| VaultError::Io(format!("failed to read {}: {e}", path.display())))?;
+        let content = reconcile_owned_content(vault, date, &path, &content)?;
         let all = parse_todos(&content);
         (
             filter_todos_by_heading(&content, all, filter.todo_heading),
@@ -296,6 +297,15 @@ fn enrich_snapshot(
         Some(heads) if !heads.is_empty() => heads,
         _ => from_day,
     });
+    let skip = vault
+        .template_path(config)
+        .and_then(|p| fs::read_to_string(p).ok())
+        .map(|raw| crate::notes::boilerplate_lines(&raw))
+        .unwrap_or_default();
+    snap.has_notes = Some(crate::notes::has_journal_body_except(
+        snap.notes.as_deref().unwrap_or(""),
+        &skip,
+    ));
     Ok(())
 }
 
@@ -497,6 +507,7 @@ pub fn defer_todo(
 
     let today_next = replace_or_append_section(&today_content, heading, &stripped);
     write_atomic_with_undo(vault, date, &today_path, &today_content, &today_next)?;
+    crate::owned::remember(vault, tomorrow, heading, text);
     read_snapshot(vault, date)
 }
 
@@ -529,11 +540,20 @@ fn take_open_todo_from_body(body: &str, text: &str) -> Option<String> {
 }
 
 fn body_has_open_todo(body: &str, text: &str) -> bool {
+    body_has_todo(body, text, true)
+}
+
+fn body_has_checked_todo(body: &str, text: &str) -> bool {
+    body_has_todo(body, text, false)
+}
+
+fn body_has_todo(body: &str, text: &str, open: bool) -> bool {
     let want = text.trim();
     let re = checkbox_re();
     body.lines().any(|line| {
-        re.captures(line)
-            .is_some_and(|caps| caps[3].eq(" ") && caps[5].trim() == want)
+        re.captures(line).is_some_and(|caps| {
+            caps[5].trim() == want && caps[3].eq(" ") == open
+        })
     })
 }
 
@@ -703,7 +723,11 @@ fn add_todo_lines(
         })
         .collect();
     let next = insert_todo_lines(&content, &lines);
-    write_atomic_with_undo(vault, date, &path, &content, &next)
+    write_atomic_with_undo(vault, date, &path, &content, &next)?;
+    for (_, text) in items {
+        crate::owned::remember(vault, date, "Tasks", text);
+    }
+    Ok(())
 }
 
 fn expect_line_text(
@@ -939,7 +963,7 @@ pub fn week_summary_with(
             done_count: snap.done_count.unwrap_or(0),
             exists: snap.exists.unwrap_or(false),
             is_today: d == today,
-            has_notes: crate::notes::has_journal_body(snap.notes.as_deref().unwrap_or("")),
+            has_notes: snap.has_notes.unwrap_or(false),
         });
     }
     Ok(WeekSummary {
@@ -1000,7 +1024,7 @@ pub fn month_summary_with(
             done_count: snap.done_count.unwrap_or(0),
             exists: snap.exists.unwrap_or(false),
             is_today: d == today,
-            has_notes: crate::notes::has_journal_body(snap.notes.as_deref().unwrap_or("")),
+            has_notes: snap.has_notes.unwrap_or(false),
         });
     }
     Ok(WeekSummary {
@@ -1019,7 +1043,55 @@ fn write_atomic_with_undo(
     after: &str,
 ) -> Result<(), VaultError> {
     crate::undo::record_before(vault, date, path, before)?;
-    write_atomic(vault.root(), path, after)
+    write_atomic(vault.root(), path, after)?;
+    crate::open::nudge_sync(vault.root());
+    Ok(())
+}
+
+/// If Obsidian Sync replaced this note with a virgin Daily template, put back
+/// todos this clock had written. A missing item in a *non*-template note is
+/// treated as an intentional delete.
+fn reconcile_owned_content(
+    vault: &Vault,
+    date: NaiveDate,
+    path: &Path,
+    content: &str,
+) -> Result<String, VaultError> {
+    let owned = crate::owned::list_for(vault, date);
+    if owned.is_empty() {
+        return Ok(content.to_string());
+    }
+    let config = vault.daily_notes_config()?;
+    let template = vault
+        .template_path(&config)
+        .and_then(|p| fs::read_to_string(p).ok());
+    let virgin = template
+        .as_deref()
+        .is_some_and(|tpl| crate::notes::is_virgin_template(content, tpl));
+    let mut next = content.to_string();
+    let mut keep = Vec::new();
+    let mut rewritten = false;
+    for item in owned {
+        let body = extract_section(&next, &item.heading);
+        if body_has_open_todo(&body, &item.text) {
+            keep.push(item);
+            continue;
+        }
+        if body_has_checked_todo(&body, &item.text) {
+            continue;
+        }
+        if virgin {
+            let updated = append_open_todo(&extract_section(&next, &item.heading), &item.text);
+            next = replace_or_append_section(&next, &item.heading, &updated);
+            keep.push(item);
+            rewritten = true;
+        }
+    }
+    crate::owned::replace_for(vault, date, keep);
+    if rewritten {
+        write_atomic(vault.root(), path, &next)?;
+    }
+    Ok(next)
 }
 
 /// Public wrapper used by the undo module to restore content.
@@ -1781,6 +1853,41 @@ mod tests {
             1
         );
         let _ = fs::remove_dir_all(vault.root());
+    }
+
+    #[test]
+    fn status_restores_clock_todo_when_sync_replaces_note_with_template() {
+        let template = "## Notes\n## Links / captured ideas\n## Tasks\n## Morning review\nQuelle sera ma posture si cela arrive ?\n";
+        let root = unique_temp("heal");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        fs::create_dir_all(root.join("Templates")).unwrap();
+        fs::create_dir_all(root.join("Daily")).unwrap();
+        fs::write(
+            root.join(".obsidian/daily-notes.json"),
+            r#"{"folder":"Daily","format":"YYYY-MM-DD","template":"Templates/Daily"}"#,
+        )
+        .unwrap();
+        fs::write(root.join("Templates/Daily.md"), template).unwrap();
+        fs::write(root.join("Daily/2026-08-20.md"), "## Tasks\n- [ ] ship\n").unwrap();
+        let vault = Vault {
+            root: root.clone(),
+            archive: None,
+        };
+        let date = NaiveDate::from_ymd_opt(2026, 8, 20).unwrap();
+        defer_todo(&vault, date, Some("Tasks"), "ship").unwrap();
+        let tomorrow = root.join("Daily/2026-08-21.md");
+        fs::write(&tomorrow, template).unwrap();
+        let snap = read_snapshot(&vault, NaiveDate::from_ymd_opt(2026, 8, 21).unwrap()).unwrap();
+        let todos = snap.todos.unwrap();
+        assert!(
+            todos.iter().any(|t| t.text == "ship" && !t.checked),
+            "expected ship restored, got {todos:?}"
+        );
+        assert!(!snap.has_notes.unwrap_or(true), "template prompts counted as notes");
+        let body = fs::read_to_string(&tomorrow).unwrap();
+        assert!(body.contains("- [ ] ship"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

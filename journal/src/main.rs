@@ -149,6 +149,8 @@ enum Command {
         #[arg(long)]
         date: Option<String>,
     },
+    /// Start Obsidian if it is down; hide to tray when Background Tray is on
+    EnsureObsidian,
     /// Replace the free-form notes section body
     SetNotes {
         #[arg(long, allow_hyphen_values = true)]
@@ -313,6 +315,11 @@ fn main() {
             filter,
             open_in_obsidian,
         )),
+        Command::EnsureObsidian => {
+            if let Ok(vault) = Vault::resolve(vault_arg, archive_arg) {
+                obsidian_daily_qs::open::ensure_obsidian(vault.root());
+            }
+        }
         Command::SetNotes { text, date } => emit(run(
             vault_arg,
             archive_arg,

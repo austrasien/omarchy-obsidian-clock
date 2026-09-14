@@ -23,6 +23,9 @@ pub fn watch(
     notes_h2_count: Option<usize>,
 ) {
     let mut last_key: Option<String> = None;
+    if let Ok(vault) = Vault::resolve(cli_vault.clone(), cli_archive.clone()) {
+        crate::open::nudge_sync(vault.root());
+    }
     loop {
         let snap = current_snapshot(
             cli_vault.clone(),
@@ -115,6 +118,7 @@ mod tests {
             is_today: Some(true),
             template_name: None,
             created_from_template: None,
+            has_notes: None,
             error_code: None,
             error: None,
         }

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "austraz.clock",
   "name": "Obsidian Clock",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "author": "austrasien (fork of Omarchy clock)",
   "license": "MIT",
   "description": "Date/time label with a calendar popup and Obsidian daily journal",

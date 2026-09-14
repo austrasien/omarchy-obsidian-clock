@@ -40,6 +40,15 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
 
+## What’s new in 1.7
+
+Obsidian Sync only uploads while the desktop app is running. The clock now keeps that process alive, and it can put back todos Sync wiped by replacing a day with a blank Daily template.
+
+- On bar start (and after a write if Obsidian is still down), the widget starts the app. If [Background Tray](https://community.obsidian.md/plugins/background-tray) (or Tray) is **enabled** in that vault, the window is closed into the tray so Sync keeps running without stealing the desktop. Without it, the window stays open.
+- Todos this clock wrote (Add / →) are remembered. If Sync later replaces that note with an unused Daily template, those open items are restored under the same heading. A delete in a note you actually edited is left alone.
+- White calendar cells ignore Daily-template prompt lines, so an unused template day no longer looks like it has notes.
+- Close uses Hyprland’s Lua dispatcher (`hl.dsp.window.close`), which is what Omarchy’s `hyprctl dispatch` actually accepts.
+
 ## What’s new in 1.6
 
 Open todos can move to tomorrow without dumping the rest of today’s list onto that note.
@@ -102,8 +111,9 @@ Writes replace that one section only. No extra blank line after the `##` or befo
 - ↗ opens the selected day in Obsidian (creates the note from the vault’s Daily Notes template if it is missing).
 
 ### 🔌 Backend (bundled)
-- Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed copy) for `status`, `month`, `week`, `set-notes`, `add`, `toggle`, `defer`, `open`.
+- Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed copy) for `status`, `month`, `week`, `set-notes`, `add`, `toggle`, `defer`, `open`, `ensure-obsidian`.
 - `defer --text=… --date YYYY-MM-DD` (with `--notes-heading`) moves one open checkbox to the next day. `month` / `week` default `--heading` to `tasks`.
+- `ensure-obsidian` starts the desktop app when it is down, then hides it to the tray when a close-to-tray plugin is enabled.
 - `status` returns every `##` as `{heading, body}` plus `templateHeadings` from the daily template. `set-notes --notes-heading <title>` replaces that body only.
 - Rust sources live under `journal/` (Apache-2.0 fork of [obsidian-daily-qs](https://github.com/LucaNerlich/obsidian-daily-qs) with whole-note journal mode).
 - Optional override: `journalBin`. No separate `austraz.obsidian-daily` / marketplace daily plugin required.
