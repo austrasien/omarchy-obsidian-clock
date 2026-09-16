@@ -449,6 +449,21 @@ pub fn defer_todo(
     heading: Option<&str>,
     text: &str,
 ) -> Result<Snapshot, VaultError> {
+    let target = date
+        .checked_add_days(chrono::Days::new(1))
+        .ok_or_else(|| VaultError::Io("date overflow".into()))?;
+    defer_todo_to(vault, date, target, heading, text)
+}
+
+/// Move one still-open todo from `date` to `target`, under the same `##`.
+/// Creating the target note does **not** roll over the rest of the source list.
+pub fn defer_todo_to(
+    vault: &Vault,
+    date: NaiveDate,
+    target: NaiveDate,
+    heading: Option<&str>,
+    text: &str,
+) -> Result<Snapshot, VaultError> {
     let text = text.trim();
     if text.is_empty() {
         return Err(VaultError::Io("todo text is empty".into()));
@@ -460,9 +475,9 @@ pub fn defer_todo(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("Tasks");
-    let tomorrow = date
-        .checked_add_days(chrono::Days::new(1))
-        .ok_or_else(|| VaultError::Io("date overflow".into()))?;
+    if target == date {
+        return read_snapshot(vault, date);
+    }
 
     let config = vault.daily_notes_config()?;
     let today_path = resolved_note_path(vault, &config, date)?;
@@ -481,33 +496,33 @@ pub fn defer_todo(
         )));
     };
 
-    let tomorrow_path = resolved_note_path(vault, &config, tomorrow)?;
-    create_note_if_missing(vault, &config, &tomorrow_path, tomorrow)?;
-    let tomorrow_content = fs::read_to_string(&tomorrow_path).map_err(|e| {
+    let target_path = resolved_note_path(vault, &config, target)?;
+    create_note_if_missing(vault, &config, &target_path, target)?;
+    let target_content = fs::read_to_string(&target_path).map_err(|e| {
         VaultError::Io(format!(
             "failed to read {}: {e}",
-            tomorrow_path.display()
+            target_path.display()
         ))
     })?;
-    let tomorrow_body = extract_section(&tomorrow_content, heading);
-    if !body_has_open_todo(&tomorrow_body, text) {
-        let tomorrow_next = replace_or_append_section(
-            &tomorrow_content,
+    let target_body = extract_section(&target_content, heading);
+    if !body_has_open_todo(&target_body, text) {
+        let target_next = replace_or_append_section(
+            &target_content,
             heading,
-            &append_open_todo(&tomorrow_body, text),
+            &append_open_todo(&target_body, text),
         );
         write_atomic_with_undo(
             vault,
-            tomorrow,
-            &tomorrow_path,
-            &tomorrow_content,
-            &tomorrow_next,
+            target,
+            &target_path,
+            &target_content,
+            &target_next,
         )?;
     }
 
     let today_next = replace_or_append_section(&today_content, heading, &stripped);
     write_atomic_with_undo(vault, date, &today_path, &today_content, &today_next)?;
-    crate::owned::remember(vault, tomorrow, heading, text);
+    crate::owned::remember(vault, target, heading, text);
     read_snapshot(vault, date)
 }
 
@@ -1852,6 +1867,24 @@ mod tests {
                 .count(),
             1
         );
+        let _ = fs::remove_dir_all(vault.root());
+    }
+
+    #[test]
+    fn defer_todo_to_moves_open_task_to_chosen_day() {
+        let content = "## Tasks\n- [ ] ship\n- [ ] stay\n";
+        let (vault, date, today) = vault_with(content);
+        let target = NaiveDate::from_ymd_opt(2026, 8, 25).unwrap();
+        defer_todo_to(&vault, date, target, Some("Tasks"), "ship").unwrap();
+        let today_body = fs::read_to_string(&today).unwrap();
+        assert!(!today_body.contains("- [ ] ship"));
+        assert!(today_body.contains("- [ ] stay"));
+        let dest = vault.root().join("Daily/2026-08-25.md");
+        let dest_body = fs::read_to_string(&dest).unwrap();
+        assert!(dest_body.contains("## Tasks"));
+        assert!(dest_body.contains("- [ ] ship"));
+        assert!(!dest_body.contains("- [ ] stay"));
+        assert!(!vault.root().join("Daily/2026-08-21.md").exists());
         let _ = fs::remove_dir_all(vault.root());
     }
 

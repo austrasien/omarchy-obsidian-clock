@@ -40,6 +40,15 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
 
+## What’s new in 1.8
+
+An open todo can move to any calendar day, not only tomorrow.
+
+- Each open checkbox has a **target** next to **→**. Click it, then click a day: the item moves under the same `##` on that date, and the popup opens that day.
+- While picking, remaining days of the current month (not today) use the **theme accent**. Change month with the chevrons to target October, November, and so on. The grid size does not change.
+- **→** still means tomorrow and does not switch the selected day.
+- CLI: `defer --to YYYY-MM-DD`.
+
 ## What’s new in 1.7
 
 Obsidian Sync only uploads while the desktop app is running. The clock now keeps that process alive, and it can put back todos Sync wiped by replacing a day with a blank Daily template.
@@ -112,7 +121,7 @@ Writes replace that one section only. No extra blank line after the `##` or befo
 
 ### 🔌 Backend (bundled)
 - Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed copy) for `status`, `month`, `week`, `set-notes`, `add`, `toggle`, `defer`, `open`, `ensure-obsidian`.
-- `defer --text=… --date YYYY-MM-DD` (with `--notes-heading`) moves one open checkbox to the next day. `month` / `week` default `--heading` to `tasks`.
+- `defer --text=… --date YYYY-MM-DD` (with `--notes-heading`) moves one open checkbox to the next day, or to `--to YYYY-MM-DD`. `month` / `week` default `--heading` to `tasks`.
 - `ensure-obsidian` starts the desktop app when it is down, then hides it to the tray when a close-to-tray plugin is enabled.
 - `status` returns every `##` as `{heading, body}` plus `templateHeadings` from the daily template. `set-notes --notes-heading <title>` replaces that body only.
 - Rust sources live under `journal/` (Apache-2.0 fork of [obsidian-daily-qs](https://github.com/LucaNerlich/obsidian-daily-qs) with whole-note journal mode).

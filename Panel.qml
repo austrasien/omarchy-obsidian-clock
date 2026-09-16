@@ -91,6 +91,8 @@ Panel {
   property string pendingAdd: ""
   property var pendingDefer: null
   property var pendingEdit: null
+  property var retargetPick: null
+  property string pendingSelectAfterDefer: ""
   property string editingHeading: ""
   property int editingIndex: -1
   property bool pendingMonthRefresh: false
@@ -158,6 +160,7 @@ Panel {
   function close() {
     setCenterHoverRevealSuppressed(false)
     if (root.editingLife) root.cancelEditingLife()
+    root.retargetPick = null
     if (root.journalDirty) root.saveJournalNow()
     root.controller.hide()
   }
@@ -194,6 +197,13 @@ Panel {
 
   function selectDay(cell) {
     if (!cell || !cell.key) return
+    if (root.retargetPick) {
+      var pick = root.retargetPick
+      root.retargetPick = null
+      if (cell.key === root.selectedKey) return
+      root.deferTodo(pick.heading, pick.index, cell.key)
+      return
+    }
     var monthChanged = false
     if (!cell.inMonth) {
       monthChanged = cell.year !== root.viewYear || cell.month !== root.viewMonth
@@ -684,7 +694,19 @@ Panel {
         + (n === 1 ? "1 open task" : n + " open tasks"))
     }
     if (root.dayHasNote(cell)) extra.push("has notes")
+    if (root.retargetPick) {
+      if (cell.key === root.selectedKey) return "Click to cancel"
+      return "Move here · " + (extra.length ? label + " · " + extra.join(" · ") : label)
+    }
     return extra.length ? label + " · " + extra.join(" · ") : label
+  }
+
+  function isRetargetHintDay(day) {
+    if (!root.retargetPick || !day || !day.inMonth) return false
+    if (day.today || day.key === root.todayKey) return false
+    if (root.viewingCurrentMonth)
+      return day.key > root.todayKey
+    return true
   }
 
   function todoRowTooltip() {
@@ -731,6 +753,7 @@ Panel {
     if (String(parsed.state || "") === "error") {
       root.journalError = String(parsed.error || "Unable to read journal")
       root.pendingMonthRefresh = false
+      root.pendingSelectAfterDefer = ""
       return
     }
     root.journalError = ""
@@ -773,6 +796,7 @@ Panel {
       root.pendingMonthRefresh = false
       root.loadMonthMarks()
     }
+    root.jumpAfterDefer()
   }
 
   function anySectionHasNotes() {
@@ -939,7 +963,7 @@ Panel {
     root.writeSection(h, root.composeSectionBody(todos, rest))
   }
 
-  function deferTodo(heading, index) {
+  function deferTodo(heading, index, toKey) {
     var n = Number(index)
     if (!isFinite(n) || n < 0) return
     var h = String(heading || "")
@@ -948,25 +972,68 @@ Panel {
     if (n >= split.todos.length) return
     var item = split.todos[n]
     if (!item || item.checked) return
+    var dest = String(toKey || "").trim()
     if (root.journalDirty) {
-      root.pendingDefer = { heading: h, index: n }
+      root.pendingDefer = { heading: h, index: n, toDate: dest }
       root.saveJournalNow()
       return
     }
-    root.submitDefer(h, item.text)
+    root.submitDefer(h, item.text, dest)
   }
 
-  function submitDefer(heading, text) {
+  function beginRetarget(heading, index) {
+    var n = Number(index)
+    var h = String(heading || "")
+    if (h === "" || !isFinite(n) || n < 0) return
+    var cur = root.retargetPick
+    if (cur && cur.heading === h && cur.index === n) {
+      root.retargetPick = null
+      return
+    }
+    root.retargetPick = { heading: h, index: n }
+  }
+
+  function isRetargetingTodo(heading, index) {
+    var cur = root.retargetPick
+    return !!(cur && cur.heading === heading && cur.index === index)
+  }
+
+  function submitDefer(heading, text, toKey) {
     var h = String(heading || "")
     var trimmed = String(text || "").trim()
     if (h === "" || trimmed === "") return
     if (root.journalBin === "" || root.vaultPath === "" || root.selectedKey === "") return
     root.pendingMonthRefresh = true
-    actionProc.command = root.journalPrefix().concat([
+    var args = root.journalPrefix().concat([
       "--notes-heading", h,
       "defer", "--date", root.selectedKey, root.journalTextFlag(trimmed)
     ])
+    var dest = String(toKey || "").trim()
+    if (dest !== "") {
+      args = args.concat(["--to", dest])
+      root.pendingSelectAfterDefer = dest
+    }
+    actionProc.command = args
     actionProc.running = true
+  }
+
+  function jumpAfterDefer() {
+    var jump = String(root.pendingSelectAfterDefer || "")
+    if (jump === "") return
+    root.pendingSelectAfterDefer = ""
+    var parts = jump.split("-")
+    if (parts.length === 3) {
+      var y = Number(parts[0])
+      var m = Number(parts[1]) - 1
+      if (isFinite(y) && isFinite(m) && m >= 0 && m <= 11) {
+        if (y !== root.viewYear || m !== root.viewMonth) {
+          root.viewYear = y
+          root.viewMonth = m
+          root.loadMonthMarks()
+        }
+      }
+    }
+    root.selectDayKey(jump)
   }
 
   function onJournalEdited(text) {
@@ -1590,13 +1657,16 @@ Panel {
                         readonly property bool hovered: dayMouse.containsMouse || (day && day.key === root.hoveredKey)
                         readonly property int todoDots: root.todoDotCount(day, root.monthMarks)
                         readonly property bool hasNote: root.dayHasNote(day, root.monthMarks)
+                        readonly property bool retargetHint: root.isRetargetHintDay(day)
 
                         width: root.cellWidth
                         height: root.cellHeight
                         radius: Style.cornerRadius
                         color: selected || hovered
                           ? Style.hoverFillFor(root.contentForeground, Color.accent)
-                          : "transparent"
+                          : retargetHint
+                            ? Style.hoverFillFor(Color.accent, Color.accent)
+                            : "transparent"
                         border.width: (day && day.today || selected) ? Style.spacing.hairline : 0
                         border.color: Style.normalBorderFor(root.contentForeground, Color.accent)
 
@@ -1613,6 +1683,8 @@ Panel {
                           color: {
                             if (!(day && day.inMonth))
                               return Qt.darker(root.contentForeground, 2.2)
+                            if (dayCell.retargetHint)
+                              return Color.accent
                             if (dayCell.hasNote)
                               return "#ffffff"
                             if (day.weekend)
@@ -1789,7 +1861,7 @@ Panel {
                     }
 
                     PanelToolTip {
-                      visible: pinnedTodoMouse.containsMouse && !pinnedDeferMouse.containsMouse && !editing
+                      visible: pinnedTodoMouse.containsMouse && !pinnedDeferMouse.containsMouse && !pinnedRetargetMouse.containsMouse && !editing
                       text: root.todoRowTooltip()
                       fontFamily: root.contentFontFamily
                     }
@@ -1798,7 +1870,7 @@ Panel {
                   Row {
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    anchors.rightMargin: Style.space(22)
+                    anchors.rightMargin: Style.space(44)
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.space(8)
 
@@ -1875,33 +1947,74 @@ Panel {
                     visible: !editing
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Style.space(22)
+                    width: Style.space(44)
                     height: parent.height
                     z: 2
 
-                    Text {
-                      anchors.centerIn: parent
-                      text: "\u2192"
-                      textFormat: Text.PlainText
-                      color: pinnedDeferMouse.containsMouse
-                        ? root.contentForeground
-                        : Qt.darker(root.contentForeground, 1.5)
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.body
+                    Item {
+                      anchors.left: parent.left
+                      anchors.top: parent.top
+                      anchors.bottom: parent.bottom
+                      width: Style.space(22)
+
+                      Text {
+                        anchors.centerIn: parent
+                        text: "\u2192"
+                        textFormat: Text.PlainText
+                        color: pinnedDeferMouse.containsMouse
+                          ? root.contentForeground
+                          : Qt.darker(root.contentForeground, 1.5)
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                      }
+
+                      MouseArea {
+                        id: pinnedDeferMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.deferTodo(root.tasksHeading, modelData.index)
+                      }
+
+                      PanelToolTip {
+                        visible: pinnedDeferMouse.containsMouse
+                        text: "Move to tomorrow"
+                        fontFamily: root.contentFontFamily
+                      }
                     }
 
-                    MouseArea {
-                      id: pinnedDeferMouse
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      cursorShape: Qt.PointingHandCursor
-                      onClicked: root.deferTodo(root.tasksHeading, modelData.index)
-                    }
+                    Item {
+                      anchors.right: parent.right
+                      anchors.top: parent.top
+                      anchors.bottom: parent.bottom
+                      width: Style.space(22)
 
-                    PanelToolTip {
-                      visible: pinnedDeferMouse.containsMouse
-                      text: "Move to tomorrow"
-                      fontFamily: root.contentFontFamily
+                      Text {
+                        anchors.centerIn: parent
+                        text: "󰓾"
+                        textFormat: Text.PlainText
+                        color: pinnedRetargetMouse.containsMouse || root.isRetargetingTodo(root.tasksHeading, modelData.index)
+                          ? Color.accent
+                          : Qt.darker(root.contentForeground, 1.5)
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                      }
+
+                      MouseArea {
+                        id: pinnedRetargetMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.beginRetarget(root.tasksHeading, modelData.index)
+                      }
+
+                      PanelToolTip {
+                        visible: pinnedRetargetMouse.containsMouse
+                        text: root.isRetargetingTodo(root.tasksHeading, modelData.index)
+                          ? "Click a day, or click again to cancel"
+                          : "Move to a calendar day"
+                        fontFamily: root.contentFontFamily
+                      }
                     }
                   }
                 }
@@ -2296,7 +2409,7 @@ Panel {
                     }
 
                     PanelToolTip {
-                      visible: todoMouse.containsMouse && !sectionDeferMouse.containsMouse && !editing
+                      visible: todoMouse.containsMouse && !sectionDeferMouse.containsMouse && !sectionRetargetMouse.containsMouse && !editing
                       text: root.todoRowTooltip()
                       fontFamily: root.contentFontFamily
                     }
@@ -2305,7 +2418,7 @@ Panel {
                   Row {
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    anchors.rightMargin: Style.space(22)
+                    anchors.rightMargin: Style.space(44)
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.space(8)
 
@@ -2382,33 +2495,74 @@ Panel {
                     visible: !editing
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Style.space(22)
+                    width: Style.space(44)
                     height: parent.height
                     z: 2
 
-                    Text {
-                      anchors.centerIn: parent
-                      text: "\u2192"
-                      textFormat: Text.PlainText
-                      color: sectionDeferMouse.containsMouse
-                        ? root.contentForeground
-                        : Qt.darker(root.contentForeground, 1.5)
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.body
+                    Item {
+                      anchors.left: parent.left
+                      anchors.top: parent.top
+                      anchors.bottom: parent.bottom
+                      width: Style.space(22)
+
+                      Text {
+                        anchors.centerIn: parent
+                        text: "\u2192"
+                        textFormat: Text.PlainText
+                        color: sectionDeferMouse.containsMouse
+                          ? root.contentForeground
+                          : Qt.darker(root.contentForeground, 1.5)
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                      }
+
+                      MouseArea {
+                        id: sectionDeferMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.deferTodo(root.journalTab, modelData.index)
+                      }
+
+                      PanelToolTip {
+                        visible: sectionDeferMouse.containsMouse
+                        text: "Move to tomorrow"
+                        fontFamily: root.contentFontFamily
+                      }
                     }
 
-                    MouseArea {
-                      id: sectionDeferMouse
-                      anchors.fill: parent
-                      hoverEnabled: true
-                      cursorShape: Qt.PointingHandCursor
-                      onClicked: root.deferTodo(root.journalTab, modelData.index)
-                    }
+                    Item {
+                      anchors.right: parent.right
+                      anchors.top: parent.top
+                      anchors.bottom: parent.bottom
+                      width: Style.space(22)
 
-                    PanelToolTip {
-                      visible: sectionDeferMouse.containsMouse
-                      text: "Move to tomorrow"
-                      fontFamily: root.contentFontFamily
+                      Text {
+                        anchors.centerIn: parent
+                        text: "󰓾"
+                        textFormat: Text.PlainText
+                        color: sectionRetargetMouse.containsMouse || root.isRetargetingTodo(root.journalTab, modelData.index)
+                          ? Color.accent
+                          : Qt.darker(root.contentForeground, 1.5)
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                      }
+
+                      MouseArea {
+                        id: sectionRetargetMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.beginRetarget(root.journalTab, modelData.index)
+                      }
+
+                      PanelToolTip {
+                        visible: sectionRetargetMouse.containsMouse
+                        text: root.isRetargetingTodo(root.journalTab, modelData.index)
+                          ? "Click a day, or click again to cancel"
+                          : "Move to a calendar day"
+                        fontFamily: root.contentFontFamily
+                      }
                     }
                   }
                 }
@@ -2641,7 +2795,7 @@ Panel {
       if (root.pendingDefer) {
         var job = root.pendingDefer
         root.pendingDefer = null
-        root.deferTodo(job.heading, job.index)
+        root.deferTodo(job.heading, job.index, job.toDate || "")
         return
       }
       if (root.pendingEdit) {

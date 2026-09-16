@@ -10,7 +10,7 @@ use obsidian_daily_qs::config::Vault;
 use obsidian_daily_qs::status::{Snapshot, WeekSummary};
 use obsidian_daily_qs::watch;
 use obsidian_daily_qs::{
-    SnapshotFilter, add_todo_under, carry_over, defer_todo, delete_todo, edit_todo,
+    SnapshotFilter, add_todo_under, carry_over, defer_todo_to, delete_todo, edit_todo,
     month_summary_with,
     open_in_obsidian, read_snapshot_with, set_indent, set_notes_with, toggle_todo, undo_last,
     week_summary_with,
@@ -137,12 +137,15 @@ enum Command {
         #[arg(long)]
         date: Option<String>,
     },
-    /// Move one open todo from `date` to the next day (same heading)
+    /// Move one open todo from `date` to the next day, or to `--to` (same heading)
     Defer {
         #[arg(long, allow_hyphen_values = true)]
         text: String,
         #[arg(long)]
         date: Option<String>,
+        /// Destination day (YYYY-MM-DD). Default: the day after `--date`.
+        #[arg(long)]
+        to: Option<String>,
     },
     /// Create the daily note when missing, then open it in Obsidian
     Open {
@@ -301,12 +304,26 @@ fn main() {
             filter,
             carry_over,
         )),
-        Command::Defer { text, date } => emit(then_snapshot(
+        Command::Defer { text, date, to } => emit(then_snapshot(
             vault_arg,
             archive_arg,
             date,
             filter,
-            |vault, d| defer_todo(vault, d, notes_heading.as_deref(), &text),
+            |vault, d| {
+                let target = match to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    None => d
+                        .checked_add_days(chrono::Days::new(1))
+                        .ok_or_else(|| {
+                            obsidian_daily_qs::VaultError::Io("date overflow".into())
+                        })?,
+                    Some(s) => chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
+                        obsidian_daily_qs::VaultError::Io(format!(
+                            "invalid --to {s:?}; expected YYYY-MM-DD"
+                        ))
+                    })?,
+                };
+                defer_todo_to(vault, d, target, notes_heading.as_deref(), &text)
+            },
         )),
         Command::Open { date } => emit(then_snapshot(
             vault_arg,
