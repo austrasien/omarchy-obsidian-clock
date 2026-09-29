@@ -205,7 +205,10 @@ pub fn set_notes_with(
     }
     let config = vault.daily_notes_config()?;
     let path = resolved_note_path(vault, &config, date)?;
-    ensure_note(vault, &config, &path, date)?;
+    // Creating the file must not roll yesterday's open todos: the body
+    // argument replaces one section and would discard whatever was just moved.
+    // Carry stays on today's first `add` and on explicit `carry`.
+    create_note_if_missing(vault, &config, &path, date)?;
     let content = fs::read_to_string(&path)
         .map_err(|e| VaultError::Io(format!("failed to read {}: {e}", path.display())))?;
     let next = if let Some(n) = filter.notes_h2_count.filter(|n| *n > 0) {
@@ -630,10 +633,11 @@ pub fn ensure_note(
     date: NaiveDate,
 ) -> Result<bool, VaultError> {
     let created = create_note_if_missing(vault, config, path, date)?;
-    // First access of a new day: pull yesterday's open todos into the fresh
-    // note and leave the previous one with only its done todos. Plain note
-    // creation carries no rollover, so this cannot re-enter itself.
-    if created {
+    // First `add` on today pulls yesterday's open todos into the fresh note.
+    // Any other date (tomorrow, a backlog day) is created empty so a single
+    // new task does not take today's list with it. Plain creation does not
+    // re-enter this function.
+    if created && date == chrono::Local::now().date_naive() {
         move_open_from_previous(vault, date)?;
     }
     Ok(created)
@@ -833,6 +837,7 @@ pub fn edit_todo(
     let caps = re
         .captures(&lines[idx])
         .ok_or_else(|| VaultError::Io(format!("line {line} is not a checkbox todo")))?;
+    let old_text = caps[5].trim().to_string();
     lines[idx] = format!(
         "{}{} [{}]{}{}",
         &caps[1], &caps[2], &caps[3], &caps[4], new_text
@@ -842,6 +847,7 @@ pub fn edit_todo(
         next.push('\n');
     }
     write_atomic_with_undo(vault, date, &path, &content, &next)?;
+    crate::owned::rename_text(vault, date, &old_text, new_text);
     read_snapshot(vault, date)
 }
 
@@ -888,11 +894,19 @@ pub fn delete_todo(
         .filter(|(i, _)| !drop.contains(&(i + 1)))
         .map(|(_, line)| line)
         .collect();
+    let dropped_text: Vec<String> = todos
+        .iter()
+        .filter(|t| drop.contains(&t.line))
+        .map(|t| t.text.clone())
+        .collect();
     let mut next = kept.join("\n");
     if content.ends_with('\n') && !next.is_empty() {
         next.push('\n');
     }
     write_atomic_with_undo(vault, date, &path, &content, &next)?;
+    for text in &dropped_text {
+        crate::owned::forget_text(vault, date, text);
+    }
     read_snapshot(vault, date)
 }
 
@@ -1063,9 +1077,10 @@ fn write_atomic_with_undo(
     Ok(())
 }
 
-/// If Obsidian Sync replaced this note with a virgin Daily template, put back
-/// todos this clock had written. A missing item in a *non*-template note is
-/// treated as an intentional delete.
+/// Put back open todos this clock wrote if a later rewrite dropped them.
+/// A checked line is forgotten. `delete` forgets before this runs, so a
+/// deleted line stays gone. A missing open line is restored even when the
+/// note is no longer an unused Daily template.
 fn reconcile_owned_content(
     vault: &Vault,
     date: NaiveDate,
@@ -1076,31 +1091,23 @@ fn reconcile_owned_content(
     if owned.is_empty() {
         return Ok(content.to_string());
     }
-    let config = vault.daily_notes_config()?;
-    let template = vault
-        .template_path(&config)
-        .and_then(|p| fs::read_to_string(p).ok());
-    let virgin = template
-        .as_deref()
-        .is_some_and(|tpl| crate::notes::is_virgin_template(content, tpl));
     let mut next = content.to_string();
     let mut keep = Vec::new();
     let mut rewritten = false;
     for item in owned {
-        let body = extract_section(&next, &item.heading);
-        if body_has_open_todo(&body, &item.text) {
+        // Presence is the whole note, not only the remembered heading. `add`
+        // records "Tasks" even when the line landed under "Todos".
+        if body_has_open_todo(&next, &item.text) {
             keep.push(item);
             continue;
         }
-        if body_has_checked_todo(&body, &item.text) {
+        if body_has_checked_todo(&next, &item.text) {
             continue;
         }
-        if virgin {
-            let updated = append_open_todo(&extract_section(&next, &item.heading), &item.text);
-            next = replace_or_append_section(&next, &item.heading, &updated);
-            keep.push(item);
-            rewritten = true;
-        }
+        let updated = append_open_todo(&extract_section(&next, &item.heading), &item.text);
+        next = replace_or_append_section(&next, &item.heading, &updated);
+        keep.push(item);
+        rewritten = true;
     }
     crate::owned::replace_for(vault, date, keep);
     if rewritten {
@@ -1934,8 +1941,10 @@ mod tests {
             r#"{"folder":"Daily","format":"YYYY-MM-DD"}"#,
         )
         .unwrap();
+        let today = chrono::Local::now().date_naive();
+        let prev = today.pred_opt().expect("yesterday");
         fs::write(
-            root.join("Daily/2026-08-19.md"),
+            root.join(format!("Daily/{}.md", prev.format("%Y-%m-%d"))),
             "- [ ] drag along\n  - [ ] nested\n- [x] done yesterday\n",
         )
         .unwrap();
@@ -1943,18 +1952,155 @@ mod tests {
             root: root.clone(),
             archive: None,
         };
-        let date = NaiveDate::from_ymd_opt(2026, 8, 20).unwrap();
-        // First write of the new day creates the note and rolls yesterday's
-        // open todos into it.
-        add_todo(&vault, date, "fresh").unwrap();
-        let body = fs::read_to_string(vault.root().join("Daily/2026-08-20.md")).unwrap();
+        // First add on today creates the note and rolls yesterday's open todos.
+        add_todo(&vault, today, "fresh").unwrap();
+        let body = fs::read_to_string(
+            vault
+                .root()
+                .join(format!("Daily/{}.md", today.format("%Y-%m-%d"))),
+        )
+        .unwrap();
         assert!(body.contains("- [ ] drag along\n  - [ ] nested\n"));
         assert!(body.contains("- [ ] fresh"));
         assert_eq!(
-            fs::read_to_string(vault.root().join("Daily/2026-08-19.md")).unwrap(),
+            fs::read_to_string(vault.root().join(format!("Daily/{}.md", prev.format("%Y-%m-%d"))))
+                .unwrap(),
             "- [x] done yesterday\n"
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn add_on_a_future_day_does_not_carry_over() {
+        let root = unique_temp("rollover-future");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        fs::create_dir_all(root.join("Daily")).unwrap();
+        fs::write(
+            root.join(".obsidian/daily-notes.json"),
+            r#"{"folder":"Daily","format":"YYYY-MM-DD"}"#,
+        )
+        .unwrap();
+        let target = chrono::Local::now()
+            .date_naive()
+            .checked_add_days(chrono::Days::new(2))
+            .unwrap();
+        let prev = target.pred_opt().unwrap();
+        fs::write(
+            root.join(format!("Daily/{}.md", prev.format("%Y-%m-%d"))),
+            "- [ ] stay here\n",
+        )
+        .unwrap();
+        let vault = Vault {
+            root: root.clone(),
+            archive: None,
+        };
+        add_todo(&vault, target, "fresh").unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join(format!("Daily/{}.md", prev.format("%Y-%m-%d")))).unwrap(),
+            "- [ ] stay here\n"
+        );
+        let body =
+            fs::read_to_string(root.join(format!("Daily/{}.md", target.format("%Y-%m-%d"))))
+                .unwrap();
+        assert!(body.contains("- [ ] fresh"));
+        assert!(!body.contains("stay here"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn set_notes_on_a_new_day_does_not_carry_over() {
+        let root = unique_temp("set-notes-no-carry");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        fs::create_dir_all(root.join("Daily")).unwrap();
+        fs::write(
+            root.join(".obsidian/daily-notes.json"),
+            r#"{"folder":"Daily","format":"YYYY-MM-DD","template":"Templates/Daily"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("Templates")).unwrap();
+        fs::write(root.join("Templates/Daily.md"), "## Tasks\n").unwrap();
+        let today = chrono::Local::now().date_naive();
+        let next = today.checked_add_days(chrono::Days::new(1)).unwrap();
+        fs::write(
+            root.join(format!("Daily/{}.md", today.format("%Y-%m-%d"))),
+            "## Tasks\n- [ ] term sheet\n",
+        )
+        .unwrap();
+        let vault = Vault {
+            root: root.clone(),
+            archive: None,
+        };
+        set_notes(&vault, next, Some("Tasks"), "- [ ] Julien").unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join(format!("Daily/{}.md", today.format("%Y-%m-%d"))))
+                .unwrap(),
+            "## Tasks\n- [ ] term sheet\n"
+        );
+        let created =
+            fs::read_to_string(root.join(format!("Daily/{}.md", next.format("%Y-%m-%d")))).unwrap();
+        assert!(created.contains("- [ ] Julien"));
+        assert!(!created.contains("term sheet"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_owned_todo_is_restored_in_a_rewritten_note() {
+        let (vault, date, note) = vault_with("## Tasks\n");
+        add_todo(&vault, date, "term sheet").unwrap();
+        fs::write(&note, "## Tasks\n- [ ] Julien\n## Notes\nkept\n").unwrap();
+        let snap = read_snapshot(&vault, date).unwrap();
+        let todos = snap.todos.unwrap();
+        assert!(
+            todos.iter().any(|t| t.text == "term sheet" && !t.checked),
+            "expected term sheet restored, got {todos:?}"
+        );
+        let body = fs::read_to_string(&note).unwrap();
+        assert!(body.contains("- [ ] term sheet"));
+        assert!(body.contains("- [ ] Julien"));
+        assert!(body.contains("kept"));
+        let _ = fs::remove_dir_all(vault.root());
+    }
+
+    #[test]
+    fn delete_forgets_owned_todo() {
+        let (vault, date, note) = vault_with("## Tasks\n## Notes\nkept\n");
+        add_todo(&vault, date, "term sheet").unwrap();
+        let line = parse_todos(&fs::read_to_string(&note).unwrap())
+            .into_iter()
+            .find(|t| t.text == "term sheet")
+            .unwrap()
+            .line;
+        delete_todo(&vault, date, line, Some("term sheet"), false).unwrap();
+        fs::write(&note, "## Tasks\n## Notes\nkept\n").unwrap();
+        let snap = read_snapshot(&vault, date).unwrap();
+        assert!(
+            snap.todos
+                .unwrap()
+                .iter()
+                .all(|t| t.text != "term sheet"),
+            "deleted todo came back"
+        );
+        let _ = fs::remove_dir_all(vault.root());
+    }
+
+    #[test]
+    fn rename_updates_owned_text() {
+        let (vault, date, note) = vault_with("## Tasks\n");
+        add_todo(&vault, date, "term sheet").unwrap();
+        let line = parse_todos(&fs::read_to_string(&note).unwrap())
+            .into_iter()
+            .find(|t| t.text == "term sheet")
+            .unwrap()
+            .line;
+        edit_todo(&vault, date, line, Some("term sheet"), "term sheet v2").unwrap();
+        fs::write(&note, "## Notes\nkept\n").unwrap();
+        let snap = read_snapshot(&vault, date).unwrap();
+        let todos = snap.todos.unwrap();
+        assert!(todos.iter().any(|t| t.text == "term sheet v2"));
+        assert!(todos.iter().all(|t| t.text != "term sheet"));
+        let _ = fs::remove_dir_all(vault.root());
     }
 
     #[cfg(unix)]

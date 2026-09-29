@@ -40,6 +40,14 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
 
+## What’s new in 1.9
+
+Adding a todo no longer rewrites the whole Tasks section, so a new line cannot erase the ones already in the note.
+
+- **Add a todo… (Enter)** appends with `add`. It does not save the in-memory list over the file.
+- Creating a day from a section save, or adding a todo on a day that is not today, leaves the previous day’s open tasks where they are. Carry still happens on the first `add` of today, and on an explicit carry.
+- An open todo this clock wrote is put back if a later rewrite drops it. Checking the box, or `delete`, forgets it. A rename keeps the new wording.
+
 ## What’s new in 1.8
 
 An open todo can move to any calendar day, not only tomorrow.
@@ -54,7 +62,7 @@ An open todo can move to any calendar day, not only tomorrow.
 Obsidian Sync only uploads while the desktop app is running. The clock now keeps that process alive, and it can put back todos Sync wiped by replacing a day with a blank Daily template.
 
 - On bar start (and after a write if Obsidian is still down), the widget starts the app. If [Background Tray](https://community.obsidian.md/plugins/background-tray) (or Tray) is **enabled** in that vault, the window is closed into the tray so Sync keeps running without stealing the desktop. Without it, the window stays open.
-- Todos this clock wrote (Add / →) are remembered. If Sync later replaces that note with an unused Daily template, those open items are restored under the same heading. A delete in a note you actually edited is left alone.
+- Todos this clock wrote (Add / →) are remembered. If a later rewrite drops an open one — Sync swapping in a blank Daily template, or a section save that omitted it — it is put back under the same heading. Checking the box, or deleting the line through the CLI, forgets it. A line removed only by editing the note comes back on the next read.
 - White calendar cells ignore Daily-template prompt lines, so an unused template day no longer looks like it has notes.
 - Close uses Hyprland’s Lua dispatcher (`hl.dsp.window.close`), which is what Omarchy’s `hyprctl dispatch` actually accepts.
 

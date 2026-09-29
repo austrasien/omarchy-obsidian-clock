@@ -66,6 +66,57 @@ fn save(vault: &Vault, file: &OwnedFile) {
     }
 }
 
+/// Drop a remembered line. Checking a box and `delete` use this so a later
+/// read does not put the item back.
+pub fn forget_text(vault: &Vault, date: NaiveDate, text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    let key = date.format("%Y-%m-%d").to_string();
+    let mut file = load(vault);
+    let Some(list) = file.days.get_mut(&key) else {
+        return;
+    };
+    let before = list.len();
+    list.retain(|item| item.text != text);
+    if list.len() == before {
+        return;
+    }
+    if list.is_empty() {
+        file.days.remove(&key);
+    }
+    save(vault, &file);
+}
+
+/// Keep a remembered line under its new wording so a rename is not restored
+/// as the old text.
+pub fn rename_text(vault: &Vault, date: NaiveDate, from: &str, to: &str) {
+    let from = from.trim();
+    let to = to.trim();
+    if from.is_empty() || to.is_empty() || from == to {
+        return;
+    }
+    let key = date.format("%Y-%m-%d").to_string();
+    let mut file = load(vault);
+    let Some(list) = file.days.get_mut(&key) else {
+        return;
+    };
+    let mut changed = false;
+    for item in list.iter_mut() {
+        if item.text == from {
+            item.text = to.to_string();
+            changed = true;
+        }
+    }
+    if !changed {
+        return;
+    }
+    let mut seen = std::collections::HashSet::new();
+    list.retain(|item| seen.insert((item.heading.to_ascii_lowercase(), item.text.clone())));
+    save(vault, &file);
+}
+
 pub fn remember(vault: &Vault, date: NaiveDate, heading: &str, text: &str) {
     let heading = heading.trim();
     let text = text.trim();

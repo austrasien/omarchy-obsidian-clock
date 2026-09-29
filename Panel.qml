@@ -820,11 +820,39 @@ Panel {
     root.submitAdd(text)
   }
 
+  function lineForTodoText(text) {
+    var want = String(text || "").trim()
+    if (want === "") return -1
+    var list = root.todos || []
+    var found = -1
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].text || "").trim() !== want) continue
+      if (found >= 0) return -1
+      var line = Number(list[i].line)
+      found = isFinite(line) ? Math.floor(line) : -1
+    }
+    return found
+  }
+
   function submitAdd(text) {
     var trimmed = String(text || "").trim()
     var heading = root.tasksHeading !== "" ? root.tasksHeading : root.journalTab
     if (trimmed === "" || heading === "" || root.journalBin === "" || root.vaultPath === "" || root.selectedKey === "")
       return
+    if (notesProc.running) {
+      root.pendingAdd = trimmed
+      return
+    }
+    // Append on disk. Rewriting the whole Tasks section from the in-memory
+    // list wiped items the panel had not loaded yet, and creating a missing
+    // day that way discarded the todos just carried over from the day before.
+    if (root.isTasksHeading(heading)) {
+      notesProc.command = root.journalPrefix().concat([
+        "add", "--date", root.selectedKey, root.journalTextFlag(trimmed)
+      ])
+      notesProc.running = true
+      return
+    }
     var split = root.splitCheckboxes(root.draftForHeading(heading))
     split.todos.push({
       index: split.todos.length,
@@ -947,7 +975,21 @@ Panel {
     if (h === "" || trimmed === "" || !isFinite(n) || n < 0) return
     var split = root.splitCheckboxes(root.draftForHeading(h))
     if (n >= split.todos.length) return
-    if (String(split.todos[n].text || "") === trimmed) return
+    var previous = String(split.todos[n].text || "")
+    if (previous === trimmed) return
+    var line = root.lineForTodoText(previous)
+    if (line >= 1 && root.journalBin !== "" && root.vaultPath !== "" && root.selectedKey !== "") {
+      if (notesProc.running) {
+        root.pendingEdit = { heading: h, index: n, text: trimmed }
+        return
+      }
+      notesProc.command = root.journalPrefix().concat([
+        "edit", "--date", root.selectedKey, "--line", String(line),
+        "--expect-text=" + previous, root.journalTextFlag(trimmed)
+      ])
+      notesProc.running = true
+      return
+    }
     var rest = (h === root.journalTab && journalArea) ? journalArea.text : split.rest
     var todos = []
     for (var i = 0; i < split.todos.length; i++) {
