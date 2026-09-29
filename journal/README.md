@@ -4,9 +4,9 @@ Rust CLI used by `austraz.clock` for Obsidian daily notes (`status`, `month`,
 `week`, `set-notes`, `add`, `toggle`, `defer`, `open`, `ensure-obsidian`).
 
 `month` / `week` count checkboxes under a `##` whose title contains `tasks`
-unless `--heading` is set. `defer --text=…` moves one open item to the next
-day under `--notes-heading` (default `Tasks`) without rolling over the rest
-of today’s list. After a write, if Obsidian is closed the CLI starts it so
+unless `--heading` is set. `defer --text=…` moves one open item to tomorrow
+(today + 1) under `--notes-heading` (default `Tasks`) unless `--to` is set,
+without rolling over the rest of today’s list. After a write, if Obsidian is closed the CLI starts it so
 Sync can upload (`ensure-obsidian`); if a close-to-tray plugin is enabled it
 hides the window. If Obsidian is already running, the vault watcher is
 enough and the widget does not steal focus.

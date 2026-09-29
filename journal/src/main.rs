@@ -11,9 +11,8 @@ use obsidian_daily_qs::status::{Snapshot, WeekSummary};
 use obsidian_daily_qs::watch;
 use obsidian_daily_qs::{
     SnapshotFilter, add_todo_under, carry_over, defer_todo_to, delete_todo, edit_todo,
-    month_summary_with,
-    open_in_obsidian, read_snapshot_with, set_indent, set_notes_with, toggle_todo, undo_last,
-    week_summary_with,
+    month_summary_with, open_in_obsidian, read_snapshot_with, set_indent, set_notes_with,
+    toggle_todo, undo_last, week_summary_with,
 };
 
 #[derive(Parser)]
@@ -137,13 +136,13 @@ enum Command {
         #[arg(long)]
         date: Option<String>,
     },
-    /// Move one open todo from `date` to the next day, or to `--to` (same heading)
+    /// Move one open todo from `date` to tomorrow (the day after today), or to `--to`
     Defer {
         #[arg(long, allow_hyphen_values = true)]
         text: String,
         #[arg(long)]
         date: Option<String>,
-        /// Destination day (YYYY-MM-DD). Default: the day after `--date`.
+        /// Destination day (YYYY-MM-DD). Default: tomorrow (today + 1), not the day after `--date`.
         #[arg(long)]
         to: Option<String>,
     },
@@ -311,11 +310,10 @@ fn main() {
             filter,
             |vault, d| {
                 let target = match to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                    None => d
+                    None => Local::now()
+                        .date_naive()
                         .checked_add_days(chrono::Days::new(1))
-                        .ok_or_else(|| {
-                            obsidian_daily_qs::VaultError::Io("date overflow".into())
-                        })?,
+                        .ok_or_else(|| obsidian_daily_qs::VaultError::Io("date overflow".into()))?,
                     Some(s) => chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
                         obsidian_daily_qs::VaultError::Io(format!(
                             "invalid --to {s:?}; expected YYYY-MM-DD"

@@ -267,6 +267,19 @@ function stepMonth(year, month, delta) {
   return { year: target.getFullYear(), month: target.getMonth() }
 }
 
+// Shift a "yyyy-MM-dd" key by a whole number of calendar days. Used so
+// "Move to tomorrow" means today+1 even when another day is selected.
+function shiftKey(key, days) {
+  var parts = String(key || "").split("-")
+  if (parts.length !== 3) return ""
+  var y = Number(parts[0])
+  var m = Number(parts[1]) - 1
+  var d = Number(parts[2])
+  var n = Number(days)
+  if (!isFinite(y) || !isFinite(m) || !isFinite(d) || !isFinite(n)) return ""
+  return keyForDate(new Date(y, m, d + n))
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     dateKey: dateKey,
@@ -288,6 +301,7 @@ if (typeof module !== "undefined") {
     lifeProgressPercent: lifeProgressPercent,
     monthGrid: monthGrid,
     stepMonth: stepMonth,
+    shiftKey: shiftKey,
     clockFormats: clockFormats,
     clockFormatRing: clockFormatRing,
     nextClockFormat: nextClockFormat,

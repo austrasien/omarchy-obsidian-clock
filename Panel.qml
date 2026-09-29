@@ -201,7 +201,7 @@ Panel {
       var pick = root.retargetPick
       root.retargetPick = null
       if (cell.key === root.selectedKey) return
-      root.deferTodo(pick.heading, pick.index, cell.key)
+      root.deferTodo(pick.heading, pick.index, cell.key, true)
       return
     }
     var monthChanged = false
@@ -1005,7 +1005,11 @@ Panel {
     root.writeSection(h, root.composeSectionBody(todos, rest))
   }
 
-  function deferTodo(heading, index, toKey) {
+  function tomorrowKey() {
+    return Model.shiftKey(root.todayKey, 1)
+  }
+
+  function deferTodo(heading, index, toKey, jump) {
     var n = Number(index)
     if (!isFinite(n) || n < 0) return
     var h = String(heading || "")
@@ -1015,12 +1019,15 @@ Panel {
     var item = split.todos[n]
     if (!item || item.checked) return
     var dest = String(toKey || "").trim()
+    if (dest === "") dest = root.tomorrowKey()
+    if (dest === "") return
+    var shouldJump = !!jump
     if (root.journalDirty) {
-      root.pendingDefer = { heading: h, index: n, toDate: dest }
+      root.pendingDefer = { heading: h, index: n, toDate: dest, jump: shouldJump }
       root.saveJournalNow()
       return
     }
-    root.submitDefer(h, item.text, dest)
+    root.submitDefer(h, item.text, dest, shouldJump)
   }
 
   function beginRetarget(heading, index) {
@@ -1040,7 +1047,7 @@ Panel {
     return !!(cur && cur.heading === heading && cur.index === index)
   }
 
-  function submitDefer(heading, text, toKey) {
+  function submitDefer(heading, text, toKey, jump) {
     var h = String(heading || "")
     var trimmed = String(text || "").trim()
     if (h === "" || trimmed === "") return
@@ -1053,7 +1060,7 @@ Panel {
     var dest = String(toKey || "").trim()
     if (dest !== "") {
       args = args.concat(["--to", dest])
-      root.pendingSelectAfterDefer = dest
+      if (jump) root.pendingSelectAfterDefer = dest
     }
     actionProc.command = args
     actionProc.running = true
@@ -2837,7 +2844,7 @@ Panel {
       if (root.pendingDefer) {
         var job = root.pendingDefer
         root.pendingDefer = null
-        root.deferTodo(job.heading, job.index, job.toDate || "")
+        root.deferTodo(job.heading, job.index, job.toDate || "", job.jump)
         return
       }
       if (root.pendingEdit) {

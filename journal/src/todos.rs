@@ -415,14 +415,20 @@ fn remove_todos(
     }
     let content = fs::read_to_string(&path)
         .map_err(|e| VaultError::Io(format!("failed to read {}: {e}", path.display())))?;
-    let drop: std::collections::HashSet<usize> = parse_todos(&content)
-        .into_iter()
+    let todos = parse_todos(&content);
+    let drop: std::collections::HashSet<usize> = todos
+        .iter()
         .filter(|t| !t.checked && items.iter().any(|(_, text)| text == &t.text))
         .map(|t| t.line)
         .collect();
     if drop.is_empty() {
         return Ok(());
     }
+    let dropped_text: Vec<String> = todos
+        .iter()
+        .filter(|t| drop.contains(&t.line))
+        .map(|t| t.text.clone())
+        .collect();
     let kept: Vec<&str> = content
         .lines()
         .enumerate()
@@ -433,7 +439,11 @@ fn remove_todos(
     if content.ends_with('\n') && !next.is_empty() {
         next.push('\n');
     }
-    write_atomic(vault.root(), &path, &next)
+    write_atomic(vault.root(), &path, &next)?;
+    for text in &dropped_text {
+        crate::owned::forget_text(vault, date, text);
+    }
+    Ok(())
 }
 
 /// Roll yesterday's open todos into `date` (usually today): they are moved,
@@ -501,12 +511,8 @@ pub fn defer_todo_to(
 
     let target_path = resolved_note_path(vault, &config, target)?;
     create_note_if_missing(vault, &config, &target_path, target)?;
-    let target_content = fs::read_to_string(&target_path).map_err(|e| {
-        VaultError::Io(format!(
-            "failed to read {}: {e}",
-            target_path.display()
-        ))
-    })?;
+    let target_content = fs::read_to_string(&target_path)
+        .map_err(|e| VaultError::Io(format!("failed to read {}: {e}", target_path.display())))?;
     let target_body = extract_section(&target_content, heading);
     if !body_has_open_todo(&target_body, text) {
         let target_next = replace_or_append_section(
@@ -514,17 +520,14 @@ pub fn defer_todo_to(
             heading,
             &append_open_todo(&target_body, text),
         );
-        write_atomic_with_undo(
-            vault,
-            target,
-            &target_path,
-            &target_content,
-            &target_next,
-        )?;
+        write_atomic_with_undo(vault, target, &target_path, &target_content, &target_next)?;
     }
 
     let today_next = replace_or_append_section(&today_content, heading, &stripped);
     write_atomic_with_undo(vault, date, &today_path, &today_content, &today_next)?;
+    // Transfer ownership so a later status/heal on the source day does not
+    // put the line back (that looked like → duplicated the todo).
+    crate::owned::forget_text(vault, date, text);
     crate::owned::remember(vault, target, heading, text);
     read_snapshot(vault, date)
 }
@@ -569,9 +572,8 @@ fn body_has_todo(body: &str, text: &str, open: bool) -> bool {
     let want = text.trim();
     let re = checkbox_re();
     body.lines().any(|line| {
-        re.captures(line).is_some_and(|caps| {
-            caps[5].trim() == want && caps[3].eq(" ") == open
-        })
+        re.captures(line)
+            .is_some_and(|caps| caps[5].trim() == want && caps[3].eq(" ") == open)
     })
 }
 
@@ -962,10 +964,14 @@ pub fn week_summary(
     vault: &Vault,
     anchor: NaiveDate,
 ) -> Result<crate::status::WeekSummary, VaultError> {
-    week_summary_with(vault, anchor, SnapshotFilter {
-        todo_heading: Some("tasks"),
-        ..SnapshotFilter::default()
-    })
+    week_summary_with(
+        vault,
+        anchor,
+        SnapshotFilter {
+            todo_heading: Some("tasks"),
+            ..SnapshotFilter::default()
+        },
+    )
 }
 
 pub fn week_summary_with(
@@ -1878,6 +1884,42 @@ mod tests {
     }
 
     #[test]
+    fn defer_todo_does_not_restore_owned_item_on_source_day() {
+        let (vault, date, today) = vault_with("## Tasks\n");
+        add_todo(&vault, date, "ship").unwrap();
+        defer_todo(&vault, date, Some("Tasks"), "ship").unwrap();
+        assert!(
+            !fs::read_to_string(&today).unwrap().contains("- [ ] ship"),
+            "source still has ship after defer"
+        );
+        let dest = NaiveDate::from_ymd_opt(2026, 8, 21).unwrap();
+        let tomorrow = vault.root().join("Daily/2026-08-21.md");
+        assert!(
+            fs::read_to_string(&tomorrow)
+                .unwrap()
+                .contains("- [ ] ship")
+        );
+
+        fs::write(&today, "## Tasks\n").unwrap();
+        let snap = read_snapshot(&vault, date).unwrap();
+        assert!(
+            snap.todos.unwrap().iter().all(|t| t.text != "ship"),
+            "deferred todo restored on source day"
+        );
+
+        fs::write(&tomorrow, "## Tasks\n").unwrap();
+        let snap = read_snapshot(&vault, dest).unwrap();
+        assert!(
+            snap.todos
+                .unwrap()
+                .iter()
+                .any(|t| t.text == "ship" && !t.checked),
+            "deferred todo not restored on target day"
+        );
+        let _ = fs::remove_dir_all(vault.root());
+    }
+
+    #[test]
     fn defer_todo_to_moves_open_task_to_chosen_day() {
         let content = "## Tasks\n- [ ] ship\n- [ ] stay\n";
         let (vault, date, today) = vault_with(content);
@@ -1924,7 +1966,10 @@ mod tests {
             todos.iter().any(|t| t.text == "ship" && !t.checked),
             "expected ship restored, got {todos:?}"
         );
-        assert!(!snap.has_notes.unwrap_or(true), "template prompts counted as notes");
+        assert!(
+            !snap.has_notes.unwrap_or(true),
+            "template prompts counted as notes"
+        );
         let body = fs::read_to_string(&tomorrow).unwrap();
         assert!(body.contains("- [ ] ship"));
         let _ = fs::remove_dir_all(root);
@@ -1963,9 +2008,53 @@ mod tests {
         assert!(body.contains("- [ ] drag along\n  - [ ] nested\n"));
         assert!(body.contains("- [ ] fresh"));
         assert_eq!(
-            fs::read_to_string(vault.root().join(format!("Daily/{}.md", prev.format("%Y-%m-%d"))))
-                .unwrap(),
+            fs::read_to_string(
+                vault
+                    .root()
+                    .join(format!("Daily/{}.md", prev.format("%Y-%m-%d")))
+            )
+            .unwrap(),
             "- [x] done yesterday\n"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn carry_over_does_not_restore_owned_item_on_previous_day() {
+        let root = unique_temp("carry-owned");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        fs::create_dir_all(root.join("Daily")).unwrap();
+        fs::write(
+            root.join(".obsidian/daily-notes.json"),
+            r#"{"folder":"Daily","format":"YYYY-MM-DD"}"#,
+        )
+        .unwrap();
+        let today = chrono::Local::now().date_naive();
+        let prev = today.pred_opt().expect("yesterday");
+        fs::write(
+            root.join(format!("Daily/{}.md", prev.format("%Y-%m-%d"))),
+            "## Tasks\n",
+        )
+        .unwrap();
+        let vault = Vault {
+            root: root.clone(),
+            archive: None,
+        };
+        add_todo(&vault, prev, "drag along").unwrap();
+        add_todo(&vault, today, "fresh").unwrap();
+        let prev_path = root.join(format!("Daily/{}.md", prev.format("%Y-%m-%d")));
+        assert!(
+            !fs::read_to_string(&prev_path)
+                .unwrap()
+                .contains("- [ ] drag along"),
+            "carry-over left the item on yesterday"
+        );
+        fs::write(&prev_path, "## Tasks\n").unwrap();
+        let snap = read_snapshot(&vault, prev).unwrap();
+        assert!(
+            snap.todos.unwrap().iter().all(|t| t.text != "drag along"),
+            "carried todo restored on previous day"
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -2000,9 +2089,8 @@ mod tests {
             fs::read_to_string(root.join(format!("Daily/{}.md", prev.format("%Y-%m-%d")))).unwrap(),
             "- [ ] stay here\n"
         );
-        let body =
-            fs::read_to_string(root.join(format!("Daily/{}.md", target.format("%Y-%m-%d"))))
-                .unwrap();
+        let body = fs::read_to_string(root.join(format!("Daily/{}.md", target.format("%Y-%m-%d"))))
+            .unwrap();
         assert!(body.contains("- [ ] fresh"));
         assert!(!body.contains("stay here"));
         let _ = fs::remove_dir_all(root);
@@ -2076,10 +2164,7 @@ mod tests {
         fs::write(&note, "## Tasks\n## Notes\nkept\n").unwrap();
         let snap = read_snapshot(&vault, date).unwrap();
         assert!(
-            snap.todos
-                .unwrap()
-                .iter()
-                .all(|t| t.text != "term sheet"),
+            snap.todos.unwrap().iter().all(|t| t.text != "term sheet"),
             "deleted todo came back"
         );
         let _ = fs::remove_dir_all(vault.root());

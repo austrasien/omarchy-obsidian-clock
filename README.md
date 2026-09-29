@@ -40,6 +40,14 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
 
+## What’s new in 1.10
+
+**→** means tomorrow from **today**, not the day after the day you are looking at. Moving a task no longer leaves a copy on the source day.
+
+- From 1 January, **Move to tomorrow** writes the item on 1 October (when today is 30 September), not 2 January. The popup stays on the selected day. The calendar target still moves to a chosen date.
+- `defer` without `--to` uses today + 1. `--to YYYY-MM-DD` is unchanged.
+- A clock-owned todo is forgotten on the source day when it is deferred or carried, so a later status read does not put it back.
+
 ## What’s new in 1.9
 
 Adding a todo no longer rewrites the whole Tasks section, so a new line cannot erase the ones already in the note.
@@ -106,7 +114,7 @@ The popup does **not** assume a fixed set of titles. It lists `##` headings from
 
 | Kind | How it is recognized | In the popup | Calendar |
 | :--- | :--- | :--- | :--- |
-| **Tasks** | `##` title contains `tasks` | Pinned list + **Add a todo… (Enter)** (not a button). Done items hide behind **`N done`**. **→** on an open row defers that item to tomorrow under this heading. Right-click renames. | One dot per **open** `- [ ]` under this heading (max 5). Days **before today** use the theme **accent**. |
+| **Tasks** | `##` title contains `tasks` | Pinned list + **Add a todo… (Enter)** (not a button). Done items hide behind **`N done`**. **→** on an open row defers that item to **tomorrow from today** under this heading. Right-click renames. | One dot per **open** `- [ ]` under this heading (max 5). Days **before today** use the theme **accent**. |
 | **Other `##`** | Every other template heading, up to 6 | Button above the editor. Checkboxes in that section sit under the text field (done items also collapse). Same **→** / right-click as Tasks. | Non-checkbox prose on an in-month day turns that cell **white**. |
 
 Writes replace that one section only. No extra blank line after the `##` or before the next `##`; a newline in the editor is a newline in the file.
@@ -121,7 +129,7 @@ Writes replace that one section only. No extra blank line after the `##` or befo
 
 ### ✅ Popup
 - **Add a todo… (Enter)** at the top (focused on open), then open Tasks, then **`N done`**, then up to six section buttons (equal width) and **↗** (open in Obsidian), then the editor, then that section’s checkboxes.
-- Left-click a todo to toggle. **Right-click** to rename (Enter / Esc). **→** on an open row moves that item to tomorrow under the same heading.
+- Left-click a todo to toggle. **Right-click** to rename (Enter / Esc). **→** on an open row moves that item to **tomorrow from today** (not the day after the selected date) under the same heading.
 - Section buttons come from the daily template. Sun / moon glyphs when the title looks like a morning or nightly heading.
 - Hover any control for a short English tooltip.
 - Autosave after a short pause. A **Saving…** hint appears while dirty. The caret is not reset on save, so Enter keeps a second line.
@@ -129,7 +137,7 @@ Writes replace that one section only. No extra blank line after the `##` or befo
 
 ### 🔌 Backend (bundled)
 - Ships `bin/obsidian-daily-qs-<arch>` (plus an unsuffixed copy) for `status`, `month`, `week`, `set-notes`, `add`, `toggle`, `defer`, `open`, `ensure-obsidian`.
-- `defer --text=… --date YYYY-MM-DD` (with `--notes-heading`) moves one open checkbox to the next day, or to `--to YYYY-MM-DD`. `month` / `week` default `--heading` to `tasks`.
+- `defer --text=… --date YYYY-MM-DD` (with `--notes-heading`) moves one open checkbox to **tomorrow (today + 1)**, or to `--to YYYY-MM-DD`. `month` / `week` default `--heading` to `tasks`.
 - `ensure-obsidian` starts the desktop app when it is down, then hides it to the tray when a close-to-tray plugin is enabled.
 - `status` returns every `##` as `{heading, body}` plus `templateHeadings` from the daily template. `set-notes --notes-heading <title>` replaces that body only.
 - Rust sources live under `journal/` (Apache-2.0 fork of [obsidian-daily-qs](https://github.com/LucaNerlich/obsidian-daily-qs) with whole-note journal mode).
