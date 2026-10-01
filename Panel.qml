@@ -36,6 +36,9 @@ Panel {
   property int viewMonth: today.getMonth()
   property string selectedKey: todayKey
   property string hoveredKey: ""
+  // Move-to-today is useless on the selected day when that day is today.
+  readonly property bool canMoveToToday: selectedKey !== "" && selectedKey !== todayKey
+  readonly property int moveClusterWidth: canMoveToToday ? Style.space(22) * 3 : Style.space(22) * 2
 
   readonly property date viewDate: new Date(viewYear, viewMonth, 1)
   readonly property bool viewingCurrentMonth: viewYear === today.getFullYear() && viewMonth === today.getMonth()
@@ -1005,8 +1008,21 @@ Panel {
     root.writeSection(h, root.composeSectionBody(todos, rest))
   }
 
+  // Past or today: tomorrow from today. A future day: the day after that day.
   function tomorrowKey() {
-    return Model.shiftKey(root.todayKey, 1)
+    var selected = String(root.selectedKey || "")
+    var today = String(root.todayKey || "")
+    if (selected !== "" && today !== "" && selected > today)
+      return Model.shiftKey(selected, 1)
+    return Model.shiftKey(today, 1)
+  }
+
+  function tomorrowMoveLabel() {
+    var selected = String(root.selectedKey || "")
+    var today = String(root.todayKey || "")
+    if (selected !== "" && today !== "" && selected > today)
+      return "Move to the next day"
+    return "Move to tomorrow"
   }
 
   function deferTodo(heading, index, toKey, jump) {
@@ -1910,7 +1926,7 @@ Panel {
                     }
 
                     PanelToolTip {
-                      visible: pinnedTodoMouse.containsMouse && !pinnedDeferMouse.containsMouse && !pinnedRetargetMouse.containsMouse && !editing
+                      visible: pinnedTodoMouse.containsMouse && !pinnedDeferMouse.containsMouse && !pinnedTodayMouse.containsMouse && !pinnedRetargetMouse.containsMouse && !editing
                       text: root.todoRowTooltip()
                       fontFamily: root.contentFontFamily
                     }
@@ -1919,7 +1935,7 @@ Panel {
                   Row {
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    anchors.rightMargin: Style.space(44)
+                    anchors.rightMargin: root.moveClusterWidth
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.space(8)
 
@@ -1996,7 +2012,7 @@ Panel {
                     visible: !editing
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Style.space(44)
+                    width: root.moveClusterWidth
                     height: parent.height
                     z: 2
 
@@ -2027,7 +2043,40 @@ Panel {
 
                       PanelToolTip {
                         visible: pinnedDeferMouse.containsMouse
-                        text: "Move to tomorrow"
+                        text: root.tomorrowMoveLabel()
+                        fontFamily: root.contentFontFamily
+                      }
+                    }
+
+                    Item {
+                      visible: root.canMoveToToday
+                      x: Style.space(22)
+                      anchors.top: parent.top
+                      anchors.bottom: parent.bottom
+                      width: Style.space(22)
+
+                      Text {
+                        anchors.centerIn: parent
+                        text: "\u2193"
+                        textFormat: Text.PlainText
+                        color: pinnedTodayMouse.containsMouse
+                          ? root.contentForeground
+                          : Qt.darker(root.contentForeground, 1.5)
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                      }
+
+                      MouseArea {
+                        id: pinnedTodayMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.deferTodo(root.tasksHeading, modelData.index, root.todayKey)
+                      }
+
+                      PanelToolTip {
+                        visible: pinnedTodayMouse.containsMouse
+                        text: "Move today"
                         fontFamily: root.contentFontFamily
                       }
                     }
@@ -2458,7 +2507,7 @@ Panel {
                     }
 
                     PanelToolTip {
-                      visible: todoMouse.containsMouse && !sectionDeferMouse.containsMouse && !sectionRetargetMouse.containsMouse && !editing
+                      visible: todoMouse.containsMouse && !sectionDeferMouse.containsMouse && !sectionTodayMouse.containsMouse && !sectionRetargetMouse.containsMouse && !editing
                       text: root.todoRowTooltip()
                       fontFamily: root.contentFontFamily
                     }
@@ -2467,7 +2516,7 @@ Panel {
                   Row {
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    anchors.rightMargin: Style.space(44)
+                    anchors.rightMargin: root.moveClusterWidth
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.space(8)
 
@@ -2544,7 +2593,7 @@ Panel {
                     visible: !editing
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Style.space(44)
+                    width: root.moveClusterWidth
                     height: parent.height
                     z: 2
 
@@ -2575,7 +2624,40 @@ Panel {
 
                       PanelToolTip {
                         visible: sectionDeferMouse.containsMouse
-                        text: "Move to tomorrow"
+                        text: root.tomorrowMoveLabel()
+                        fontFamily: root.contentFontFamily
+                      }
+                    }
+
+                    Item {
+                      visible: root.canMoveToToday
+                      x: Style.space(22)
+                      anchors.top: parent.top
+                      anchors.bottom: parent.bottom
+                      width: Style.space(22)
+
+                      Text {
+                        anchors.centerIn: parent
+                        text: "\u2193"
+                        textFormat: Text.PlainText
+                        color: sectionTodayMouse.containsMouse
+                          ? root.contentForeground
+                          : Qt.darker(root.contentForeground, 1.5)
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.body
+                      }
+
+                      MouseArea {
+                        id: sectionTodayMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.deferTodo(root.journalTab, modelData.index, root.todayKey)
+                      }
+
+                      PanelToolTip {
+                        visible: sectionTodayMouse.containsMouse
+                        text: "Move today"
                         fontFamily: root.contentFontFamily
                       }
                     }

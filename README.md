@@ -34,11 +34,19 @@ Omarchy’s clock already paints a month grid. This fork keeps that, and wires e
 | :--- | :--- | :--- |
 | **See the month** | Yes | Yes |
 | **Open that day’s journal** | No | Click the day |
-| **Todos** | — | Inbox at the top (**Add a todo… (Enter)**); **→** moves one item to tomorrow; right-click renames; dots = **open Tasks** (max 5) |
+| **Todos** | — | Inbox at the top (**Add a todo… (Enter)**); **→** moves one item (tomorrow, or the next day if you are already in the future); **Move today** when the day is not today; right-click renames; dots = **open Tasks** (max 5) |
 | **Journal text** | — | One button per `##` in your daily template (up to 6), editor below |
 | **Omarchy** | Built-in | User plugin; disable `omarchy.clock` |
 
 > **Note:** Vault location is **not** hardcoded. You set it once on the widget (see below). Nothing from your notes is committed to this repo.
+
+## What’s new in 1.11
+
+**→** still means tomorrow from **today** when the day you are looking at is today or earlier. On a future day it means the next day after that day. A second control, **Move today**, sends the item to today.
+
+- From a past day (or today), **Move to tomorrow** is still tomorrow from today. From 12 October, when today is 1 October, the same button writes 13 October.
+- **Move today** shows on any day that is not today. It does not change which day the popup is showing.
+- `defer` without `--to` is still today + 1. The buttons pass `--to`.
 
 ## What’s new in 1.10
 
@@ -114,7 +122,7 @@ The popup does **not** assume a fixed set of titles. It lists `##` headings from
 
 | Kind | How it is recognized | In the popup | Calendar |
 | :--- | :--- | :--- | :--- |
-| **Tasks** | `##` title contains `tasks` | Pinned list + **Add a todo… (Enter)** (not a button). Done items hide behind **`N done`**. **→** on an open row defers that item to **tomorrow from today** under this heading. Right-click renames. | One dot per **open** `- [ ]` under this heading (max 5). Days **before today** use the theme **accent**. |
+| **Tasks** | `##` title contains `tasks` | Pinned list + **Add a todo… (Enter)** (not a button). Done items hide behind **`N done`**. **→** on an open row defers that item to tomorrow from today, or to the next day when the selected day is in the future. **Move today** defers it to today. Right-click renames. | One dot per **open** `- [ ]` under this heading (max 5). Days **before today** use the theme **accent**. |
 | **Other `##`** | Every other template heading, up to 6 | Button above the editor. Checkboxes in that section sit under the text field (done items also collapse). Same **→** / right-click as Tasks. | Non-checkbox prose on an in-month day turns that cell **white**. |
 
 Writes replace that one section only. No extra blank line after the `##` or before the next `##`; a newline in the editor is a newline in the file.
@@ -129,7 +137,7 @@ Writes replace that one section only. No extra blank line after the `##` or befo
 
 ### ✅ Popup
 - **Add a todo… (Enter)** at the top (focused on open), then open Tasks, then **`N done`**, then up to six section buttons (equal width) and **↗** (open in Obsidian), then the editor, then that section’s checkboxes.
-- Left-click a todo to toggle. **Right-click** to rename (Enter / Esc). **→** on an open row moves that item to **tomorrow from today** (not the day after the selected date) under the same heading.
+- Left-click a todo to toggle. **Right-click** to rename (Enter / Esc). **→** on an open row moves that item under the same heading: to **tomorrow from today** when the selected day is today or earlier, or to **the next day** when it is in the future. **Move today** (hidden on today) moves it to today. Neither button changes the selected day.
 - Section buttons come from the daily template. Sun / moon glyphs when the title looks like a morning or nightly heading.
 - Hover any control for a short English tooltip.
 - Autosave after a short pause. A **Saving…** hint appears while dirty. The caret is not reset on save, so Enter keeps a second line.

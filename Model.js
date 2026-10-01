@@ -267,8 +267,9 @@ function stepMonth(year, month, delta) {
   return { year: target.getFullYear(), month: target.getMonth() }
 }
 
-// Shift a "yyyy-MM-dd" key by a whole number of calendar days. Used so
-// "Move to tomorrow" means today+1 even when another day is selected.
+// Shift a "yyyy-MM-dd" key by a whole number of calendar days. "Move to
+// tomorrow" uses today+1 when the selected day is today or earlier, and
+// the next day after a future selection.
 function shiftKey(key, days) {
   var parts = String(key || "").split("-")
   if (parts.length !== 3) return ""
