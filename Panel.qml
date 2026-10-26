@@ -1229,7 +1229,7 @@ Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    centerOnBar: true
+    centerOnBar: false  // under the icon, wherever it sits (centre, tray drawer)
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(
       Math.max(Style.space(440), root.calendarGridWidth + panel.padding * 2 + Style.space(16)))
